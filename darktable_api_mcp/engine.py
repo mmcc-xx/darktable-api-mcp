@@ -137,6 +137,7 @@ class Engine:
 
     async def _open(self) -> None:
         self._reader, self._writer = await asyncio.open_unix_connection(str(SOCKET), limit=1 << 24)
+        self._methods = None               # a new server: ask again what it supports
         self._read_task = asyncio.create_task(self._read_loop())
 
     def _spawn(self) -> subprocess.Popen:
@@ -224,6 +225,16 @@ class Engine:
 
     # ── requests ────────────────────────────────────────────────────────────
 
+    async def supports(self, name: str) -> bool:
+        """Whether the server has a method, or a method's later option
+        ("render.zoom"), from its ping. darktable's window can be an older
+        build than the engine; servers from before ping listed its methods
+        support none of the later ones."""
+        if getattr(self, "_methods", None) is None:
+            r = await self.call("ping")
+            self._methods = set(r.get("methods") or [])
+        return name in self._methods
+
     async def call(self, method: str, **params) -> dict:
         """A request that needs no open image (browsing, ratings, library)."""
         self._edits_waiting += 1
@@ -260,10 +271,11 @@ class Engine:
             return r
 
     async def render(self, image_id: int, width: int, height: int,
-                     uncropped: bool = False) -> tuple[bytes, dict] | None:
+                     uncropped: bool = False, region: dict | None = None) -> tuple[bytes, dict] | None:
         """JPEG bytes and timings, or None if a newer render request arrived
         while this one waited. uncropped leaves the crop module's box out
-        (to draw a new one on)."""
+        (to draw a new one on); region ({zoom, center_x, center_y}) renders
+        width x height of the photo at that scale (1 = 100%)."""
         self._render_seq += 1
         seq = self._render_seq
         self._edits_waiting += 1
@@ -272,7 +284,8 @@ class Engine:
             if seq != self._render_seq:
                 return None
             return await self._to_file(lambda **p: self._session_call(image_id, "render", **p),
-                                       width=width, height=height, quality=85, uncropped=uncropped)
+                                       width=width, height=height, quality=85, uncropped=uncropped,
+                                       **(region or {}))
 
     async def thumbnail(self, image_id: int, size: int) -> bytes:
         """darktable's thumbnail for the image; yields to queued edits."""

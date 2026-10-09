@@ -25,11 +25,12 @@ owner.
 | `open_photo` | open a photo for editing (joins an edit already open in another app, unsaved changes included) |
 | `open_darkroom_photo` | open the photo the user has open in darktable's darkroom (when darktable's window serves the library) |
 | `list_modules`, `get_module` | the photo's modules; a module's settings with values, defaults, ranges and dropdown values |
-| `set_module`, `enable_module` | change settings by name (checked, all or nothing), module on/off |
+| `set_module`, `enable_module` | change settings by name (checked, all or nothing), lists whole or by element (`grey[1]`), module on/off |
+| `list_presets`, `apply_preset` | a module's presets, applied as darktable's presets menu does (e.g. "monochrome \| luminance-based") |
 | `get_history`, `set_history_end` | history steps; undo/redo to a step |
 | `get_geometry`, `rotate_photo`, `crop_photo` | orientation, straightening (with the automatic crop) and crop, through darktable's flip, rotate and perspective, and crop modules |
 | `export_photo` | darktable's export of the saved edit to a file (format, size, quality, output pattern, style; the user's export settings otherwise) |
-| `render_preview` | darktable's rendering of the current, unsaved edit (image); `uncropped=True` shows the whole photo to choose a crop on |
+| `render_preview` | darktable's rendering of the current, unsaved edit (image); `uncropped=True` shows the whole photo to choose a crop on; `zoom=1` a region at 100% |
 | `save`, `discard_changes`, `start_over` | write the edit to the library; reopen as saved; delete the edit and apply darktable's defaults again (asks for `confirm`) |
 | `library_status`, `release_library`, `acquire_library`, `takeover_library` | hand the library to darktable's GUI and take it back; `takeover_library` asks a running darktable to quit the normal way (asks for `confirm`, never kills it) |
 

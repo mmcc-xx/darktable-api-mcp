@@ -31,6 +31,10 @@ module's setting names, ranges and dropdown values before set_module.
 Orientation, straightening and cropping: get_geometry, rotate_photo,
 crop_photo (render_preview(uncropped=True) shows the whole photo to choose a
 crop on). export_photo writes a finished file with darktable's export.
+Presets: list_presets / apply_preset (e.g. color calibration's "monochrome |
+luminance-based" for black and white, denoise (profiled) presets).
+render_preview(zoom=1) shows a region at 100% to judge noise, sharpness and
+dust.
 
 The engine is shared: the user may be looking at or editing the same photo
 in a web app at the same time. open_photo joins an edit already open there,
@@ -57,6 +61,19 @@ async def _call(method: str, **params) -> dict:
         return await engine.call(method, **params)
     except EngineError as exc:
         raise _err(exc)
+
+
+async def _require(*names: str) -> None:
+    """Refuse a feature the server doesn't have, rather than have an older
+    one ignore an option or fail with "unknown method"."""
+    for name in names:
+        try:
+            ok = await engine.supports(name)
+        except EngineError as exc:
+            raise _err(exc)
+        if not ok:
+            raise ToolError(f"the darktable serving the library is too old for this ('{name}'): "
+                            "it needs a newer darktable-api build (restart darktable or the engine)")
 
 
 async def _edit(image_id: int | None, method: str, **params) -> dict:
@@ -191,7 +208,9 @@ async def list_modules() -> dict:
 async def get_module(operation: str, instance: int = 0) -> dict:
     """A module's settings on the open photo: for each setting its name,
     current value, default, allowed range (min/max) and, for dropdowns, the
-    possible values (name and label). Use these names in set_module."""
+    possible values (name and label). List settings have a "shape" (e.g.
+    [4], or [6, 7]) and nested values, e.g. color calibration's gray mix
+    "grey" (R, G, B, normalization). Use these names in set_module."""
     return await _edit(None, "module_get", operation=operation, instance=instance)
 
 
@@ -199,10 +218,35 @@ async def get_module(operation: str, instance: int = 0) -> dict:
 async def set_module(operation: str, values: dict[str, Any], instance: int = 0) -> dict:
     """Change settings of a module on the open photo, e.g.
     set_module("exposure", {"exposure": 0.7}). Names and ranges come from
-    get_module; dropdown values by name, label or number. All values are
-    checked first: one bad value changes nothing. Turns the module on and
+    get_module; dropdown values by name, label or number. List settings
+    whole, as nested lists of their shape ({"grey": [0.3, 0.6, 0.1, 0]}), or
+    one element by index ({"grey[1]": 0.6}, {"x[0][3]": 0.5}). All values
+    are checked first: one bad value changes nothing. Turns the module on and
     adds a history step, as darktable's darkroom does. Not saved until save."""
+    if any("[" in k or isinstance(v, list) for k, v in values.items()):
+        await _require("module_set.lists")
     return await _edit(None, "module_set", operation=operation, values=values, instance=instance)
+
+
+@mcp.tool()
+async def list_presets(operation: str, instance: int = 0) -> dict:
+    """A module's presets, as its presets menu lists them: name (pass it to
+    apply_preset), label (as darktable shows it, also accepted), builtin,
+    autoapply. E.g. channelmixerrgb (color calibration) has "monochrome |
+    luminance-based" and film-emulation B&W mixes; denoiseprofile has
+    "wavelets: chroma only"."""
+    await _require("preset_list")
+    return await _edit(None, "preset_list", operation=operation, instance=instance)
+
+
+@mcp.tool()
+async def apply_preset(operation: str, name: str, instance: int = 0) -> dict:
+    """Apply a module preset on the open photo, as darktable's presets menu
+    does: the preset's settings, on/off and blending replace the module's,
+    as one history step. name: from list_presets (name or label). Not saved
+    until save."""
+    await _require("preset_apply")
+    return await _edit(None, "preset_apply", operation=operation, name=name, instance=instance)
 
 
 @mcp.tool()
@@ -304,16 +348,28 @@ async def crop_photo(left: float | None = None, top: float | None = None, right:
 
 
 @mcp.tool(structured_output=False)
-async def render_preview(size: int = 1200, uncropped: bool = False) -> Image:
+async def render_preview(size: int = 1200, uncropped: bool = False, zoom: float | None = None,
+                         center_x: float = 0.5, center_y: float = 0.5) -> Image:
     """darktable's rendering of the open photo with its current (unsaved)
     edit, fitted inside size x size. Use it to check edits. uncropped=True
     shows the whole photo without the crop module's crop (still oriented
-    and straightened), the frame crop_photo's fractions refer to."""
+    and straightened), the frame crop_photo's fractions refer to.
+
+    zoom: render a size x size region at this scale instead of the whole
+          photo: 1 = 100% (each pixel of the photo, for judging noise,
+          sharpness, dust), 0.5 = 50%, up to 2. center_x, center_y: the
+          region's center as fractions 0-1 of the photo (0.5, 0.5 = middle;
+          the region stays inside the photo)."""
     if engine.image_id is None:
         raise ToolError("no photo is open: call open_photo(image_id) first")
+    region = None
+    if zoom is not None:
+        await _require("render.zoom")
+        region = {"zoom": max(0.01, min(zoom, 2.0)), "center_x": min(max(center_x, 0.0), 1.0),
+                  "center_y": min(max(center_y, 0.0), 1.0)}
     try:
         r = await engine.render(engine.image_id, max(64, min(size, 2560)), max(64, min(size, 2560)),
-                                uncropped)
+                                uncropped, region)
     except EngineError as exc:
         raise _err(exc)
     if r is None:
