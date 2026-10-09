@@ -7,6 +7,10 @@ license = { text = "GPL-3.0-or-later" }
 requires-python = ">=3.10"
 dependencies = ["mcp>=1.10,<2"]  # 2.x renamed FastMCP
 
+[project.optional-dependencies]
+# find_dust_spots / heal_dust_spots read the raw files
+dust = ["numpy>=2", "opencv-python-headless>=4.8", "rawpy>=0.19"]
+
 [project.scripts]
 darktable-api-mcp = "darktable_api_mcp.server:main"
 

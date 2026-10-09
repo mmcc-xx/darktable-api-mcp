@@ -9,6 +9,9 @@ patching is involved.
 
 from __future__ import annotations
 
+import asyncio
+import json
+from pathlib import Path
 from typing import Any
 
 from mcp.server.fastmcp import FastMCP, Image
@@ -35,6 +38,9 @@ Presets: list_presets / apply_preset (e.g. color calibration's "monochrome |
 luminance-based" for black and white, denoise (profiled) presets).
 render_preview(zoom=1) shows a region at 100% to judge noise, sharpness and
 dust.
+Sensor dust: find_dust_spots (maps dust that recurs across the photo's film
+roll, rates it in this photo), heal_dust_spots (heal circles in retouch, one
+history step, checked at 100% before/after).
 
 The engine is shared: the user may be looking at or editing the same photo
 in a web app at the same time. open_photo joins an edit already open there,
@@ -448,6 +454,248 @@ async def start_over(confirm: bool = False) -> dict:
     if not confirm:
         raise ToolError("start_over deletes the whole edit: ask the user, then pass confirm=True")
     return await _edit(None, "reset")
+
+
+# ── sensor dust ──────────────────────────────────────────────────────────────
+
+def _dust_module():
+    try:
+        from . import dust
+    except ImportError as exc:
+        raise ToolError(f"the dust tools need numpy, opencv and rawpy: "
+                        f"pip install 'darktable-api-mcp[dust]' ({exc})")
+    return dust
+
+
+async def _roll_frames(info: dict) -> list[tuple[int, Path]]:
+    """The photo's film roll: frames of the same sensor size (one camera), one
+    per raw file (duplicates share it)."""
+    rolls = (await _call("film_rolls"))["film_rolls"]
+    roll = next((r for r in rolls if r["folder"] == info["folder"]), None)
+    if roll is None:
+        raise ToolError(f"no film roll for {info['folder']}")
+    frames, seen, offset = [], set(), 0
+    while True:
+        page = await _call("images_list", film_id=roll["id"], rating="all", offset=offset, limit=1000)
+        for im in page["images"]:
+            p = Path(im["folder"]) / im["filename"]
+            if (im["width"], im["height"]) == (info["width"], info["height"]) and p not in seen:
+                seen.add(p)
+                frames.append((im["id"], p))
+        offset += 1000
+        if offset >= page["total"]:
+            return frames
+
+
+async def _dust_analysis(image_id: int | None, rebuild_map: bool = False) -> dict:
+    """What find_dust_spots and heal_dust_spots need for one photo. Opens it
+    (joining an edit already open) so retouch circles include unsaved ones."""
+    dust = _dust_module()
+    await _require("coords", "retouch_list")
+    if image_id is None:
+        image_id = engine.image_id
+    if image_id is None:
+        raise ToolError("give image_id, or open a photo first")
+    info = (await _call("image_info", imgid=image_id))["image"]
+    raw_path = Path(info["folder"]) / info["filename"]
+    frames = await _roll_frames(info)
+    loop = asyncio.get_running_loop()
+    try:
+        dust_map = await loop.run_in_executor(None, lambda: dust.build_map(
+            frames, f"{info['width']}x{info['height']}", f"roll_{Path(info['folder']).name}", force=rebuild_map))
+        lum, geom = await loop.run_in_executor(None, dust.render_sensor, raw_path)
+    except Exception as exc:
+        raise ToolError(f"dust detection failed: {exc}")
+    if (geom["half_width"], geom["half_height"]) != (dust_map["geometry"]["half_width"],
+                                                    dust_map["geometry"]["half_height"]):
+        raise ToolError("this photo's sensor size differs from its roll's dust map")
+    try:
+        await engine.open(image_id)
+        rl = await engine.edit(image_id, "retouch_list")
+    except EngineError as exc:
+        raise _err(exc)
+    circles = []
+    for c in rl["spots"]:
+        if c.get("type") == "circle" and c.get("active"):
+            x, y, r = dust.half_from_raw(c["x"], c["y"], c["r"], geom)
+            circles.append({"x": x, "y": y, "r": r})
+    spots = dust.spots_in_frame(lum, dust_map)
+    for s in spots:
+        s["already_retouched"] = any(((s["x"] - c["x"]) ** 2 + (s["y"] - c["y"]) ** 2) ** 0.5 <= c["r"]
+                                     for c in circles)
+        s["raw"] = dust.raw_norm(s["x"], s["y"], geom)
+    # where each spot is on the photo as rendered (lens, rotation, crop...)
+    if spots:
+        try:
+            pts = (await engine.edit(image_id, "coords", points=[[s["raw"]["raw_x"], s["raw"]["raw_y"]] for s in spots],
+                                     **{"from": "raw", "to": "image"}))["points"]
+        except EngineError as exc:
+            raise _err(exc)
+        for s, (u, v) in zip(spots, pts):
+            s["on_photo"] = [round(u, 4), round(v, 4)] if 0 <= u <= 1 and 0 <= v <= 1 else None
+    return {"image_id": image_id, "info": info, "dust_map": dust_map, "lum": lum, "geom": geom,
+            "circles": circles, "spots": spots}
+
+
+def _dust_spot_json(s: dict, geom: dict) -> dict:
+    return {"id": s["id"], "status": s["status"], "already_retouched": s["already_retouched"],
+            "darkening_pct": round(100 * s["depth"], 1), "contrast_vs_background": s["ratio"],
+            "background": s["background"], "diameter_px": int(round(4 * s["r"])),
+            "on_photo": s.get("on_photo"), "raw_x": s["raw"]["raw_x"], "raw_y": s["raw"]["raw_y"],
+            "found_in_roll_frames": s["roll_frames"]}
+
+
+@mcp.tool(structured_output=False)
+async def find_dust_spots(image_id: int | None = None, rebuild_map: bool = False) -> list:
+    """Find sensor dust in a photo (default: the open one). Read-only.
+
+    Dust sits at the same sensor position in every frame, so this maps the
+    soft dark round blobs that recur across the photo's film roll (cached; the
+    first call for a roll reads every raw file, ~0.4 s each), then measures
+    each mapped spot in this photo: dust shows against smooth, bright-ish
+    backgrounds (sky), more at small apertures.
+
+    Returns a summary and a sheet of numbered crops (sensor orientation,
+    contrast-stretched; green = visible here, red = hidden). Per spot: status
+    ("obvious": repair it; "visible": seen through some texture; "hidden":
+    texture or an edge hides it, leave it), already_retouched (an active
+    retouch circle covers it, unsaved ones included), darkening %,
+    contrast_vs_background, background, diameter_px (full size), on_photo
+    (x, y as fractions of the photo as rendered; null if cropped out: use it
+    for render_preview(zoom=1, center_x, center_y)), and in how many frames of
+    the roll it recurs. Finds the obvious dust, not every speck. Opens the
+    photo (joins its edit). heal_dust_spots repairs them."""
+    from mcp.server.fastmcp import Image as McpImage
+    a = await _dust_analysis(image_id, rebuild_map)
+    dust = _dust_module()
+    out = [_dust_spot_json(s, a["geom"]) for s in a["spots"]]
+    m = a["dust_map"]
+    summary = {
+        "image_id": a["image_id"], "file": a["info"]["filename"],
+        "obvious": [s["id"] for s in out if s["status"] == "obvious"],
+        "visible": [s["id"] for s in out if s["status"] == "visible"],
+        "hidden": [s["id"] for s in out if s["status"] == "hidden"],
+        "already_retouched": [s["id"] for s in out if s["already_retouched"]],
+        "spots": out,
+        "dust_map": {"roll": a["info"]["folder"], "frames_scanned": m["frames"],
+                     "dust_positions": len(m["dust"]), "recurrence_threshold_frames": m["threshold_frames"],
+                     "unreadable_frames": [s["file"] for s in m["skipped"]]},
+    }
+    return [json.dumps(summary), McpImage(data=dust.crop_sheet(a["lum"], a["spots"]), format="png")]
+
+
+async def _spot_crops(image_id: int, plan: list[dict], size: int = 240) -> dict[int, tuple]:
+    """100% renders around each planned spot: (luminance crop, spot x, y in it)."""
+    import cv2
+    import numpy as np
+    out = {}
+    for p in plan:
+        u, v = p["spot"]["on_photo"]
+        r = await engine.render(image_id, size, size, False, {"zoom": 1.0, "center_x": u, "center_y": v})
+        if r is None:
+            continue
+        data, info = r
+        reg = info["region"]
+        im = cv2.imdecode(np.frombuffer(data, np.uint8), cv2.IMREAD_COLOR).astype(np.float32) / 255.0
+        lum = im @ np.array([0.0722, 0.7152, 0.2126], np.float32)    # BGR
+        h, w = lum.shape
+        out[p["spot"]["id"]] = (lum, (u - reg["left"]) / (reg["right"] - reg["left"]) * w,
+                                (v - reg["top"]) / (reg["bottom"] - reg["top"]) * h)
+    return out
+
+
+@mcp.tool(structured_output=False)
+async def heal_dust_spots(image_id: int | None = None, spots: list[int] | None = None,
+                          include_visible: bool = False, dry_run: bool = False) -> list:
+    """Heal sensor dust in a photo (default: the open one) with darktable's
+    retouch module.
+
+    By default heals the spots find_dust_spots rates "obvious" that no active
+    retouch circle covers yet; include_visible adds the "visible" ones, and
+    spots=[ids] picks specific ones. Each gets a heal circle about twice the
+    dust's radius, copying from a nearby patch chosen to be smooth and to
+    match the brightness around it. All are added as one history step
+    (undo: set_history_end). Not saved until save.
+
+    Checks the result at 100% around each spot before and after and returns
+    the darkening per spot before/after (healed when it mostly disappears),
+    plus a before/after sheet. dry_run=True only returns the plan."""
+    from mcp.server.fastmcp import Image as McpImage
+    import cv2
+    import numpy as np
+    await _require("retouch_heal", "render.zoom")
+    a = await _dust_analysis(image_id)
+    dust = _dust_module()
+    geom, lum, image_id = a["geom"], a["lum"], a["image_id"]
+    if spots:
+        targets = [s for s in a["spots"] if s["id"] in set(spots)]
+    else:
+        wanted = {"obvious", "visible"} if include_visible else {"obvious"}
+        targets = [s for s in a["spots"] if s["status"] in wanted and not s["already_retouched"]]
+    skipped = [{"id": s["id"], "why": "already retouched"} for s in a["spots"]
+               if s["already_retouched"] and s not in targets]
+    avoid = ([(d["x"], d["y"], d["r"]) for d in a["dust_map"]["dust"]]
+             + [(c["x"], c["y"], c["r"] / 2.5) for c in a["circles"]])
+    plan = []
+    for s in targets:
+        if s.get("on_photo") is None:
+            skipped.append({"id": s["id"], "why": "outside the photo as cropped"})
+            continue
+        R = dust.heal_radius(s["r"])
+        src = dust.choose_source(lum, s["x"], s["y"], R, [v for v in avoid if (v[0], v[1]) != (s["x"], s["y"])])
+        if src is None:
+            skipped.append({"id": s["id"], "why": "no clean source patch nearby"})
+            continue
+        plan.append({"spot": s, "R": R, "source": src, "spec": dust.heal_spec(s, src, R, geom)})
+    summary = {"image_id": image_id, "file": a["info"]["filename"],
+               "plan": [{"id": p["spot"]["id"], "status": p["spot"]["status"],
+                         "heal_diameter_px": int(round(4 * p["R"])),
+                         "source_offset_px": [int(round(2 * (p["source"]["x"] - p["spot"]["x"]))),
+                                              int(round(2 * (p["source"]["y"] - p["spot"]["y"])))],
+                         "source_brightness_diff_pct": p["source"]["brightness_diff_pct"],
+                         "circle": p["spec"]} for p in plan],
+               "skipped": skipped}
+    if not plan:
+        summary["note"] = "nothing to heal" + ("" if a["spots"] else ": no dust mapped for this roll")
+        return [json.dumps(summary)]
+    if dry_run:
+        return [json.dumps(summary),
+                McpImage(data=dust.crop_sheet(lum, [p["spot"] for p in plan]), format="png")]
+
+    try:
+        before = await _spot_crops(image_id, plan)
+        r = await engine.edit(image_id, "retouch_heal", spots=[p["spec"] for p in plan])
+        after = await _spot_crops(image_id, plan)
+    except EngineError as exc:
+        raise _err(exc)
+    summary.update(added=r["added"], history_end=r["history_end"])
+    checks, rows = [], []
+    for p in plan:
+        sid = p["spot"]["id"]
+        if sid not in before or sid not in after:
+            checks.append({"id": sid, "result": "not checked (render overtaken)"})
+            continue
+        (lb, x, y), (la, _, _) = before[sid], after[sid]
+        rr = max(6.0, 2 * p["spot"]["r"])            # full-size pixels: a 100% render
+        db, da = dust.darkening_at(lb, x, y, rr), dust.darkening_at(la, x, y, rr)
+        checks.append({"id": sid, "darkening_before_pct": round(100 * db, 1),
+                       "darkening_after_pct": round(100 * da, 1), "healed": da <= max(0.02, 0.4 * db)})
+        pair = []
+        for img in (lb, la):
+            c = np.clip((img - img.mean()) / (6 * img.std() + 1e-6) + 0.5, 0, 1)
+            t = cv2.cvtColor((c * 255).astype(np.uint8), cv2.COLOR_GRAY2BGR)
+            cv2.putText(t, f"#{sid}", (4, 16), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (60, 200, 60), 1)
+            pair.append(t)
+        rows.append(np.hstack(pair))
+    summary["check"] = checks
+    out = [json.dumps(summary)]
+    if rows:
+        width = max(r.shape[1] for r in rows)
+        rows = [np.pad(r, ((0, 0), (0, width - r.shape[1]), (0, 0))) for r in rows]
+        ok, png = cv2.imencode(".png", np.vstack(rows))
+        if ok:
+            out.append(McpImage(data=png.tobytes(), format="png"))
+    return out
 
 
 # ── sharing the library with darktable's GUI ─────────────────────────────────
