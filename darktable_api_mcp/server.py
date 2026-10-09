@@ -28,6 +28,9 @@ white balance in color calibration (channelmixerrgb), then the tone mapper
 (agx, or sigmoid/filmicrgb on older edits; never two), then tone equalizer
 (toneequal) and color balance rgb (colorbalancergb). Use get_module to learn a
 module's setting names, ranges and dropdown values before set_module.
+Orientation, straightening and cropping: get_geometry, rotate_photo,
+crop_photo (render_preview(uncropped=True) shows the whole photo to choose a
+crop on). export_photo writes a finished file with darktable's export.
 
 The engine is shared: the user may be looking at or editing the same photo
 in a web app at the same time. open_photo joins an edit already open there,
@@ -224,19 +227,146 @@ async def set_history_end(end: int) -> dict:
     return await _edit(None, "history_end", end=end)
 
 
+@mcp.tool()
+async def get_geometry() -> dict:
+    """The open photo's orientation, straightening and crop:
+    orientation (rotation in clockwise degrees and mirrored, relative to the
+    raw file as the camera wrote it), angle (straightening, degrees, rotate
+    and perspective module), autocrop (that module's automatic crop),
+    crop (left, top, right, bottom as fractions 0-1 of the uncropped photo,
+    i.e. after orientation and straightening), aspect ("free", "original" or
+    "W:H" of the crop), frame_width/frame_height (the uncropped photo in
+    pixels) and width/height (the result)."""
+    return await _edit(None, "geometry_get")
+
+
+@mcp.tool()
+async def rotate_photo(degrees: int = 0, angle: float | None = None, mirror: str | None = None,
+                       autocrop: str | None = None) -> dict:
+    """Turn, mirror or straighten the open photo, as darktable's darkroom does.
+
+    degrees: turn by quarter turns, relative to now: 90 = clockwise,
+             -90 = counter-clockwise, 180 (orientation module). An existing
+             crop turns with the photo.
+    angle: straighten to this absolute angle in degrees (rotate and
+           perspective module, -180..180; small values like -3..3 level a
+           horizon). Positive turns counter-clockwise. The automatic crop
+           is refitted so no blank corners show.
+    mirror: "horizontal" (left-right) or "vertical".
+    autocrop: rotate and perspective's automatic crop: "ASHIFT_CROP_LARGEST"
+              (largest area, default), "ASHIFT_CROP_ASPECT" (keep the
+              aspect ratio) or "ASHIFT_CROP_OFF".
+    Returns the new geometry (as get_geometry). Not saved until save."""
+    params: dict[str, Any] = {}
+    if degrees:
+        params["rotate"] = degrees
+    if angle is not None:
+        params["angle"] = angle
+    if mirror is not None:
+        params["flip"] = mirror
+    if autocrop is not None:
+        params["autocrop"] = autocrop
+    if not params:
+        raise ToolError("give degrees, angle, mirror or autocrop")
+    return await _edit(None, "geometry_set", **params)
+
+
+@mcp.tool()
+async def crop_photo(left: float | None = None, top: float | None = None, right: float | None = None,
+                     bottom: float | None = None, aspect: str | None = None, remove: bool = False) -> dict:
+    """Crop the open photo (crop module), as darktable's darkroom does.
+
+    left, top, right, bottom: the crop's edges as fractions 0-1 of the
+        uncropped photo (as render_preview(uncropped=True) shows it: after
+        orientation and straightening); right/bottom are edges, not sizes.
+        Give all four, or none to reshape the current crop with aspect.
+    aspect: "free", "original" (the camera's ratio), "square", or "W:H" of
+        the result, e.g. "3:2", "2:3" (portrait), "16:9", "4:5". The largest
+        box of that aspect inside the given (or current) one is used,
+        centered on it.
+    remove: remove the crop.
+    Returns the new geometry (as get_geometry). Not saved until save."""
+    edges = [left, top, right, bottom]
+    if remove:
+        if any(e is not None for e in edges) or aspect:
+            raise ToolError("remove=True takes no edges or aspect")
+        return await _edit(None, "geometry_set", crop=None)
+    params: dict[str, Any] = {}
+    if any(e is not None for e in edges):
+        if any(e is None for e in edges):
+            raise ToolError("give all four of left, top, right, bottom")
+        params["crop"] = {"left": left, "top": top, "right": right, "bottom": bottom}
+    if aspect is not None:
+        params["aspect"] = aspect
+    if not params:
+        raise ToolError("give the crop's edges, an aspect, or remove=True")
+    return await _edit(None, "geometry_set", **params)
+
+
 @mcp.tool(structured_output=False)
-async def render_preview(size: int = 1200) -> Image:
+async def render_preview(size: int = 1200, uncropped: bool = False) -> Image:
     """darktable's rendering of the open photo with its current (unsaved)
-    edit, fitted inside size x size. Use it to check edits."""
+    edit, fitted inside size x size. Use it to check edits. uncropped=True
+    shows the whole photo without the crop module's crop (still oriented
+    and straightened), the frame crop_photo's fractions refer to."""
     if engine.image_id is None:
         raise ToolError("no photo is open: call open_photo(image_id) first")
     try:
-        r = await engine.render(engine.image_id, max(64, min(size, 2560)), max(64, min(size, 2560)))
+        r = await engine.render(engine.image_id, max(64, min(size, 2560)), max(64, min(size, 2560)),
+                                uncropped)
     except EngineError as exc:
         raise _err(exc)
     if r is None:
         raise ToolError("overtaken by a newer render request")
     return Image(data=r[0], format="jpeg")
+
+
+@mcp.tool()
+async def export_photo(image_id: int | None = None, format: str | None = None, size: int | None = None,
+                       quality: int | None = None, high_quality: bool | None = None,
+                       path: str | None = None, on_conflict: str | None = None, style: str | None = None,
+                       save_first: bool = False) -> dict:
+    """Export a photo to a file with darktable's export (as its export
+    button does), from the photo's SAVED edit. Settings not given come from
+    the user's darktable export settings.
+
+    image_id: default the open photo.
+    format: "jpeg", "tiff", "png", "webp", "jpegxl", ... (darktable's format
+            modules; "jpg"/"tif"/"jxl" work too).
+    size: longest side in pixels; 0 = full size.
+    quality: 1-100 for JPEG, WebP, JPEG XL.
+    high_quality: process at full resolution, then scale (slower, sharper).
+    path: output pattern without extension, with darktable variables, e.g.
+          "$(FILE_FOLDER)/darktable_exported/$(FILE_NAME)" (the usual
+          default) or "/Users/me/Desktop/$(FILE_NAME)_web". A folder ending
+          in "/" gets the file name.
+    on_conflict: "unique" (add _01, ...), "overwrite", "overwrite_if_changed",
+                 "skip".
+    style: a darktable style to apply on export.
+    save_first: if the photo has unsaved changes, save them first (they
+                belong to whoever is editing it, so ask the user); without
+                it, unsaved changes are refused.
+    Returns the file written (or skipped: true)."""
+    if image_id is None:
+        image_id = engine.image_id
+    if image_id is None:
+        raise ToolError("give image_id, or open a photo first")
+    params: dict[str, Any] = {"imgid": image_id, "save": save_first}
+    if format:
+        params["format"] = format
+    if size is not None:
+        params["max_width"] = params["max_height"] = max(0, size)
+    for key, value in (("quality", quality), ("high_quality", high_quality), ("path", path),
+                       ("on_conflict", on_conflict), ("style", style)):
+        if value is not None:
+            params[key] = value
+    try:
+        return await engine.call("export", **params)
+    except EngineError as exc:
+        if "unsaved" in str(exc):
+            raise ToolError("the photo has unsaved changes and export uses the saved edit: save, or pass "
+                            "save_first=True (both save the whole shared edit: ask the user)")
+        raise _err(exc)
 
 
 @mcp.tool()

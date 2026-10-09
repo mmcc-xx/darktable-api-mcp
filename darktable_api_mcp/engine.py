@@ -259,9 +259,11 @@ class Engine:
             self.image_id = image_id
             return r
 
-    async def render(self, image_id: int, width: int, height: int) -> tuple[bytes, dict] | None:
+    async def render(self, image_id: int, width: int, height: int,
+                     uncropped: bool = False) -> tuple[bytes, dict] | None:
         """JPEG bytes and timings, or None if a newer render request arrived
-        while this one waited."""
+        while this one waited. uncropped leaves the crop module's box out
+        (to draw a new one on)."""
         self._render_seq += 1
         seq = self._render_seq
         self._edits_waiting += 1
@@ -270,7 +272,7 @@ class Engine:
             if seq != self._render_seq:
                 return None
             return await self._to_file(lambda **p: self._session_call(image_id, "render", **p),
-                                       width=width, height=height, quality=85)
+                                       width=width, height=height, quality=85, uncropped=uncropped)
 
     async def thumbnail(self, image_id: int, size: int) -> bytes:
         """darktable's thumbnail for the image; yields to queued edits."""
