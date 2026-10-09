@@ -108,8 +108,13 @@ web page updates live, and `save` saves the whole edit. The engine keeps up
 to 3 photos open and stops 10 minutes after the last client disconnected,
 unless something is unsaved.
 
-darktable's GUI can't open the library while the engine has it: use
-`release_library` / `acquire_library`.
+darktable's own window can serve the library as well: started (from the
+same fork) with `--api-socket` pointing at the same socket, it takes over
+from the engine automatically, unsaved edits included, and the photo open in
+its darkroom is shared live: the AI's changes move darktable's sliders, and
+the user's changes in darktable reach the AI. When darktable quits, the
+server goes back to the engine. (`release_library` / `acquire_library` are for
+a darktable started without `--api-socket`.)
 
 Tested on macOS. On Linux, `takeover_library` uses darktable's D-Bus `Quit`
 method (untested).

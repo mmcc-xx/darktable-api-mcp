@@ -32,8 +32,10 @@ module's setting names, ranges and dropdown values before set_module.
 The engine is shared: the user may be looking at or editing the same photo
 in a web app at the same time. open_photo joins an edit already open there,
 including its unsaved changes; changes made here show up for the user right
-away, and save saves the photo's whole edit (theirs too). Tell the user what
-you are doing. One photo is "current" for these tools at a time (the last
+away, and save saves the photo's whole edit (theirs too). darktable's own
+window may be serving the library: then the photo in its darkroom is the
+one the user is editing there, and your changes move its sliders. Tell the
+user what you are doing. One photo is "current" for these tools at a time (the last
 open_photo). While the library is released to darktable's GUI, only
 library_status, acquire_library and takeover_library work."""
 

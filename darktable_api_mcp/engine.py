@@ -87,6 +87,7 @@ class Engine:
         self._render_seq = 0
         self._edits_waiting = 0
         self._listeners: list[Callable[[dict], None]] = []
+        self._handover_until = 0.0     # darktable's window is taking over: don't start an engine
         self.image_id: int | None = None      # the image this client last opened
 
     def available(self) -> tuple[bool, str]:
@@ -106,36 +107,44 @@ class Engine:
             self._listeners.remove(fn)
 
     async def _connect(self) -> None:
+        """Connect to whoever serves the library: the engine, or darktable's
+        window started with --api. Starts an engine if nobody does, except
+        while darktable's window is taking over from one (it will listen on
+        the same socket). An engine that can't get the library (darktable's
+        window still closing it) gives up; it is started again until it can."""
         async with self._connect_lock:
             if self._writer is not None and not self._writer.is_closing():
                 return
-            try:
-                await self._open()
-            except OSError:
-                ok, why = self.available()
-                if not ok:
-                    raise EngineError(why)
-                self._spawn()
-                t = time.time()
-                while True:
-                    try:
-                        await self._open()
-                        break
-                    except OSError:
-                        if time.time() - t > START_TIMEOUT_S:
-                            raise EngineError(f"the engine didn't start (see {LOG})")
-                        await asyncio.sleep(0.2)
+            t = time.time()
+            proc = None
+            while True:
+                try:
+                    await self._open()
+                    self._handover_until = 0.0
+                    return
+                except OSError:
+                    pass
+                if time.time() - t > START_TIMEOUT_S:
+                    raise EngineError(f"nobody serves the library and the engine didn't start (see {LOG})")
+                if time.time() >= self._handover_until and (proc is None or proc.poll() is not None):
+                    ok, why = self.available()
+                    if not ok:
+                        raise EngineError(why)
+                    if proc is not None:
+                        await asyncio.sleep(1)
+                    proc = self._spawn()
+                await asyncio.sleep(0.2)
 
     async def _open(self) -> None:
         self._reader, self._writer = await asyncio.open_unix_connection(str(SOCKET), limit=1 << 24)
         self._read_task = asyncio.create_task(self._read_loop())
 
-    def _spawn(self) -> None:
+    def _spawn(self) -> subprocess.Popen:
         """Start the engine on its own (not a child of this process), so it
         keeps serving other clients when this one exits."""
         CACHE.mkdir(parents=True, exist_ok=True)
         with open(LOG, "ab") as log:
-            subprocess.Popen(
+            return subprocess.Popen(
                 [str(BIN), "--listen", str(SOCKET), "--max-sessions", str(MAX_SESSIONS),
                  "--idle-exit", str(IDLE_EXIT_S),
                  "--core", "--configdir", str(CONFIG), "--cachedir", str(CACHE)],
@@ -151,6 +160,8 @@ class Engine:
                     break
                 msg = json.loads(line)
                 if msg.get("method") == "event":
+                    if (msg.get("params") or {}).get("type") == "handover":
+                        self._handover_until = time.time() + START_TIMEOUT_S
                     for fn in list(self._listeners):
                         try:
                             fn(msg.get("params") or {})
@@ -180,21 +191,33 @@ class Engine:
         self._writer = None
 
     async def _call(self, method: str, **params) -> dict:
-        """Send one request; the caller holds the lock."""
-        if self._writer is None or self._writer.is_closing():
-            await self._connect()
-        rid = next(self._ids)
-        fut = asyncio.get_running_loop().create_future()
-        self._pending[rid] = fut
-        self._writer.write((json.dumps({"jsonrpc": "2.0", "id": rid, "method": method,
-                                        "params": params}) + "\n").encode())
-        try:
-            await self._writer.drain()
-            msg = await asyncio.wait_for(fut, CALL_TIMEOUT_S)
-        except (ConnectionError, asyncio.TimeoutError) as exc:
-            self._pending.pop(rid, None)
-            await self.stop()
-            raise EngineError(f"the engine stopped responding ({type(exc).__name__})") from exc
+        """Send one request; the caller holds the lock. A connection found
+        dead while sending (the server went away: darktable's window quit, an
+        engine handed over) is replaced and the request sent once more; it
+        never reached a server."""
+        for attempt in (1, 2):
+            if self._writer is None or self._writer.is_closing():
+                await self._connect()
+            rid = next(self._ids)
+            fut = asyncio.get_running_loop().create_future()
+            self._pending[rid] = fut
+            try:
+                self._writer.write((json.dumps({"jsonrpc": "2.0", "id": rid, "method": method,
+                                                "params": params}) + "\n").encode())
+                await self._writer.drain()
+            except ConnectionError as exc:
+                self._pending.pop(rid, None)
+                await self.stop()
+                if attempt == 2:
+                    raise EngineError(f"lost the connection to the engine ({type(exc).__name__})") from exc
+                continue
+            try:
+                msg = await asyncio.wait_for(fut, CALL_TIMEOUT_S)
+                break
+            except (ConnectionError, asyncio.TimeoutError, EngineError) as exc:
+                self._pending.pop(rid, None)
+                await self.stop()
+                raise EngineError(f"the engine stopped responding ({type(exc).__name__})") from exc
         if "error" in msg:
             raise EngineError(msg["error"].get("message", "engine error"))
         return msg.get("result") or {}
