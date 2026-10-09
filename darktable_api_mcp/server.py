@@ -42,6 +42,10 @@ Local edits: get_blending / set_blending (blend mode, opacity, parametric
 ranges, e.g. noise reduction only in the shadows), add_mask / list_masks /
 remove_mask (drawn circle, ellipse, gradient). measure_photo reads values,
 histogram and clipping of the rendered photo.
+Instances: add_module_instance (e.g. a second color calibration for creative
+B&W, a second denoise pass), rename_module_instance, remove_module_instance.
+Before/after: render_preview(history_step=0) shows the original without
+undoing. compress_history tidies the history (and saves).
 Sensor dust: find_dust_spots (maps dust that recurs across the photo's film
 roll, rates it in this photo), heal_dust_spots (heal circles in retouch, one
 history step, checked at 100% before/after).
@@ -266,6 +270,48 @@ async def enable_module(operation: str, enabled: bool, instance: int = 0) -> dic
 
 
 @mcp.tool()
+async def add_module_instance(operation: str, instance: int = 0, copy: bool = False) -> dict:
+    """Add another instance of a module after the given one in the pipe, as
+    the module's "new instance" (copy=False: default settings) or
+    "duplicate" (copy=True: its settings and blending) does. Returns the new
+    instance number for get_module/set_module/... (instance=...). E.g. a
+    second channelmixerrgb for creative monochrome, a second denoiseprofile
+    for a separate chroma pass. One history step."""
+    await _require("module_add")
+    return await _edit(None, "module_add", operation=operation, instance=instance, copy=copy)
+
+
+@mcp.tool()
+async def remove_module_instance(operation: str, instance: int) -> dict:
+    """Delete one instance of a module (not a module's only instance: switch
+    that off with enable_module). Its history steps go with it, as in
+    darktable; undoing to before the deletion doesn't bring it back."""
+    await _require("module_remove")
+    return await _edit(None, "module_remove", operation=operation, instance=instance)
+
+
+@mcp.tool()
+async def rename_module_instance(operation: str, instance: int, name: str) -> dict:
+    """Label a module instance as darktable's module header does, e.g.
+    "creative mono"; "" gives the label back to darktable."""
+    await _require("module_rename")
+    return await _edit(None, "module_rename", operation=operation, instance=instance, name=name)
+
+
+@mcp.tool()
+async def compress_history(truncate: bool = False, confirm: bool = False) -> dict:
+    """Compress the open photo's history as darktable's history panel does:
+    one step per module instance (truncate=True instead only drops the steps
+    above the current one, i.e. undone ones). This SAVES the photo's whole
+    edit first (darktable compresses the saved history), which may be the
+    user's too: ask, then pass confirm=True."""
+    if not confirm:
+        raise ToolError("compress_history saves the edit first: ask the user, then pass confirm=True")
+    await _require("history_compress")
+    return await _edit(None, "history_compress", truncate=truncate)
+
+
+@mcp.tool()
 async def get_history() -> dict:
     """The open photo's history steps: num (0-based; darktable's history panel
     shows num + 1), operation, instance, enabled, applied; and history_end, the
@@ -359,7 +405,7 @@ async def crop_photo(left: float | None = None, top: float | None = None, right:
 
 @mcp.tool(structured_output=False)
 async def render_preview(size: int = 1200, uncropped: bool = False, zoom: float | None = None,
-                         center_x: float = 0.5, center_y: float = 0.5) -> Image:
+                         center_x: float = 0.5, center_y: float = 0.5, history_step: int | None = None) -> Image:
     """darktable's rendering of the open photo with its current (unsaved)
     edit, fitted inside size x size. Use it to check edits. uncropped=True
     shows the whole photo without the crop module's crop (still oriented
@@ -369,7 +415,10 @@ async def render_preview(size: int = 1200, uncropped: bool = False, zoom: float 
           photo: 1 = 100% (each pixel of the photo, for judging noise,
           sharpness, dust), 0.5 = 50%, up to 2. center_x, center_y: the
           region's center as fractions 0-1 of the photo (0.5, 0.5 = middle;
-          the region stays inside the photo)."""
+          the region stays inside the photo).
+    history_step: render the edit as it was after that many history steps
+          (0 = the original, as get_history counts), for before/after,
+          without undoing anything."""
     if engine.image_id is None:
         raise ToolError("no photo is open: call open_photo(image_id) first")
     region = None
@@ -377,6 +426,9 @@ async def render_preview(size: int = 1200, uncropped: bool = False, zoom: float 
         await _require("render.zoom")
         region = {"zoom": max(0.01, min(zoom, 2.0)), "center_x": min(max(center_x, 0.0), 1.0),
                   "center_y": min(max(center_y, 0.0), 1.0)}
+    if history_step is not None:
+        await _require("render.history_end")
+        region = dict(region or {}, history_end=max(0, history_step))
     try:
         r = await engine.render(engine.image_id, max(64, min(size, 2560)), max(64, min(size, 2560)),
                                 uncropped, region)
@@ -465,7 +517,8 @@ async def start_over(confirm: bool = False) -> dict:
 @mcp.tool()
 async def measure_photo(points: list[list[float]] | None = None, boxes: list[dict] | None = None,
                         radius: int = 2, size: int = 1024, zoom: float | None = None,
-                        center_x: float = 0.5, center_y: float = 0.5, bins: int = 32) -> dict:
+                        center_x: float = 0.5, center_y: float = 0.5, bins: int = 32,
+                        history_step: int | None = None) -> dict:
     """Read the open photo as darktable renders it (display sRGB output, as
     the darkroom shows it; not values inside the pipe).
 
@@ -476,7 +529,9 @@ async def measure_photo(points: list[list[float]] | None = None, boxes: list[dic
     Also histograms (red, green, blue, luminance; bins) and the fraction of
     pixels clipped in the highlights (a channel at 255) and shadows (all 0).
     size: the render's size; zoom/center_x/center_y as render_preview, to
-    measure at 100% (points outside the region come back null)."""
+    measure at 100% (points outside the region come back null).
+    history_step: measure the edit as it was after that many steps (0 =
+    the original), e.g. to compare before/after."""
     await _require("sample")
     if engine.image_id is None:
         raise ToolError("no photo is open: call open_photo(image_id) first")
@@ -485,6 +540,9 @@ async def measure_photo(points: list[list[float]] | None = None, boxes: list[dic
                               "points": points or [], "boxes": boxes or []}
     if zoom is not None:
         params.update(zoom=max(0.01, min(zoom, 2.0)), center_x=center_x, center_y=center_y)
+    if history_step is not None:
+        await _require("render.history_end")
+        params["history_end"] = max(0, history_step)
     return await _edit(None, "sample", **params)
 
 
