@@ -51,6 +51,9 @@ get_curve / set_curve (rgbcurve, tonecurve, colorzones, basecurve).
 duplicate_photo makes a version (e.g. a B&W one beside the color one).
 Before/after: render_preview(history_step=0) shows the original without
 undoing. compress_history tidies the history (and saves).
+AI denoise: ai_denoise (darktable's neural restore on the raw: a new, cleaner
+DNG photo beside the original, in its group; edit that one). It runs as a
+background job: job_status / list_jobs / cancel_job.
 Sensor dust: find_dust_spots (maps dust that recurs across the photo's film
 roll, rates it in this photo), heal_dust_spots (heal circles in retouch, one
 history step, checked at 100% before/after).
@@ -1001,6 +1004,83 @@ async def heal_dust_spots(image_id: int | None = None, spots: list[int] | None =
         if ok:
             out.append(McpImage(data=png.tobytes(), format="png"))
     return out
+
+
+# ── background jobs ──────────────────────────────────────────────────────────
+
+@mcp.tool()
+async def ai_denoise(image_id: int | None = None, strength: float | None = None, wait: bool = True,
+                     timeout_s: int = 600) -> dict:
+    """Denoise a raw photo with darktable's AI raw denoise (neural restore,
+    RawNIND): the model runs on the sensor data and writes a new DNG beside
+    the original (darktable's output pattern, by default
+    <name>_restore.dng), imported into the library in the photo's group with
+    its rating, labels, tags and metadata. The new photo starts unedited:
+    open_photo(new_imgid) and edit that one (no further denoise needed,
+    usually). strength 0-1 blends the original and the denoised raw
+    (default: darktable's setting, else 1).
+
+    Runs as a background job (seconds with Apple's Neural Engine, can be
+    minutes on CPU): wait=True waits for it and returns the result
+    (new_imgid, file); wait=False returns the job at once (job_status,
+    cancel_job). Needs darktable built with AI and AI enabled."""
+    await _require("ai_denoise")
+    if image_id is None:
+        image_id = engine.image_id
+    if image_id is None:
+        raise ToolError("give image_id, or open a photo first")
+    params: dict[str, Any] = {"imgid": image_id}
+    if strength is not None:
+        params["strength"] = max(0.0, min(strength, 1.0))
+    done: dict = {}
+    finished = asyncio.Event()
+
+    def listener(ev: dict) -> None:
+        if ev.get("type") == "job" and ev.get("job") == done.get("job"):
+            done["event"] = ev
+            finished.set()
+
+    engine.add_listener(listener)          # before starting: it can end fast
+    try:
+        j = await _call("ai_denoise", **params)
+        done["job"] = j["job"]
+        if not wait:
+            return j
+        if j.get("state") != "running":
+            return j
+        try:
+            await asyncio.wait_for(finished.wait(), timeout_s)
+        except asyncio.TimeoutError:
+            return {**await _call("job_status", job=j["job"]),
+                    "note": "still running: job_status(job) later, or cancel_job(job)"}
+        return done["event"]
+    finally:
+        engine.remove_listener(listener)
+
+
+@mcp.tool()
+async def job_status(job: int) -> dict:
+    """A background job (from ai_denoise): state (running, done, failed,
+    cancelled), progress (when known), and its result (new_imgid, file) or
+    error."""
+    await _require("job_status")
+    return await _call("job_status", job=job)
+
+
+@mcp.tool()
+async def list_jobs() -> dict:
+    """The server's background jobs, running and ended."""
+    await _require("job_list")
+    return await _call("job_list")
+
+
+@mcp.tool()
+async def cancel_job(job: int) -> dict:
+    """Cancel a running background job; it ends "cancelled" and leaves no
+    file. (In darktable's window the computation stops; headless it runs to
+    its end and the result is discarded.)"""
+    await _require("job_cancel")
+    return await _call("job_cancel", job=job)
 
 
 # ── sharing the library with darktable's GUI ─────────────────────────────────
