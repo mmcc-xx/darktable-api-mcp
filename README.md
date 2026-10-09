@@ -23,6 +23,7 @@ owner.
 | `get_thumbnail` | darktable's thumbnail of a photo (image) |
 | `set_rating`, `set_color_label` | rate (0–5), reject, color labels, as darktable's lighttable |
 | `open_photo` | open a photo for editing (joins an edit already open in another app, unsaved changes included) |
+| `open_darkroom_photo` | open the photo the user has open in darktable's darkroom (when darktable's window serves the library) |
 | `list_modules`, `get_module` | the photo's modules; a module's settings with values, defaults, ranges and dropdown values |
 | `set_module`, `enable_module` | change settings by name (checked, all or nothing), module on/off |
 | `get_history`, `set_history_end` | history steps; undo/redo to a step |

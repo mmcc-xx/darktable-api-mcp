@@ -34,7 +34,9 @@ in a web app at the same time. open_photo joins an edit already open there,
 including its unsaved changes; changes made here show up for the user right
 away, and save saves the photo's whole edit (theirs too). darktable's own
 window may be serving the library: then the photo in its darkroom is the
-one the user is editing there, and your changes move its sliders. Tell the
+one the user is editing there (library_status: darkroom_imgid;
+open_darkroom_photo opens it), and your changes move its sliders. When the
+user talks about "this photo" or "the photo I have open", that's usually it. Tell the
 user what you are doing. One photo is "current" for these tools at a time (the last
 open_photo). While the library is released to darktable's GUI, only
 library_status, acquire_library and takeover_library work."""
@@ -157,6 +159,24 @@ async def open_photo(image_id: int, discard_unsaved: bool = False) -> dict:
 
 
 @mcp.tool()
+async def open_darkroom_photo() -> dict:
+    """Open the photo the user has open in darktable's darkroom (when
+    darktable's window serves the library) and make it the current photo:
+    edits then appear in darktable live, and the user's edits there are the
+    same edit."""
+    try:
+        st = await engine.library("library_status")
+    except EngineError as exc:
+        raise _err(exc)
+    if st.get("server") != "gui":
+        raise ToolError("darktable's window isn't serving the library (the headless engine is): "
+                        "ask the user which photo, or start darktable with --api-socket")
+    if not st.get("darkroom_imgid"):
+        raise ToolError("darktable's darkroom shows no photo right now")
+    return await open_photo(st["darkroom_imgid"])
+
+
+@mcp.tool()
 async def list_modules() -> dict:
     """The open photo's modules in pipeline order: operation (e.g. exposure,
     agx, colorbalancergb, channelmixerrgb, toneequal), instance, name, enabled,
@@ -248,9 +268,11 @@ async def start_over(confirm: bool = False) -> dict:
 
 @mcp.tool()
 async def library_status() -> dict:
-    """Whether the engine has the library ("owned") or has released it to
-    darktable's GUI ("released", with the GUI's process id), the open photo
-    and whether it has unsaved changes."""
+    """Who serves the library ("server": "gui" for darktable's window,
+    "engine" for the headless engine), whether the engine has released it to
+    darktable's GUI ("released", with the GUI's process id), darkroom_imgid
+    (the photo open in darktable's darkroom, 0 if none; gui only), the
+    current photo and whether it has unsaved changes."""
     try:
         return await engine.library("library_status")
     except EngineError as exc:
