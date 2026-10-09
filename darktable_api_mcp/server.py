@@ -45,6 +45,10 @@ object mask: click points on a subject, it is outlined). measure_photo reads val
 histogram and clipping of the rendered photo.
 Instances: add_module_instance (e.g. a second color calibration for creative
 B&W, a second denoise pass), rename_module_instance, remove_module_instance.
+Creative B&W: add_module_instance("channelmixerrgb", copy=True), then
+move_module(it, after the tone mapper, e.g. "agx"), set its gray mix. Curves:
+get_curve / set_curve (rgbcurve, tonecurve, colorzones, basecurve).
+duplicate_photo makes a version (e.g. a B&W one beside the color one).
 Before/after: render_preview(history_step=0) shows the original without
 undoing. compress_history tidies the history (and saves).
 Sensor dust: find_dust_spots (maps dust that recurs across the photo's film
@@ -280,6 +284,73 @@ async def add_module_instance(operation: str, instance: int = 0, copy: bool = Fa
     for a separate chroma pass. One history step."""
     await _require("module_add")
     return await _edit(None, "module_add", operation=operation, instance=instance, copy=copy)
+
+
+@mcp.tool()
+async def move_module(operation: str, instance: int = 0, after: str | None = None, after_instance: int = 0,
+                      before: str | None = None, before_instance: int = 0) -> dict:
+    """Move a module (instance) in the pipe, right after or before another,
+    as dragging it in darktable's darkroom does. darktable's rules apply
+    (some modules can't move). Typical: a second color calibration for
+    creative B&W goes after the tone mapper: move_module("channelmixerrgb",
+    1, after="agx"). Returns its new position (iop_order)."""
+    await _require("module_move")
+    if (after is None) == (before is None):
+        raise ToolError("give after=<operation> or before=<operation>")
+    ref = {"after": {"operation": after, "instance": after_instance}} if after else \
+          {"before": {"operation": before, "instance": before_instance}}
+    return await _edit(None, "module_move", operation=operation, instance=instance, **ref)
+
+
+@mcp.tool()
+async def get_curve(operation: str, instance: int = 0) -> dict:
+    """The curves of a curve module on the open photo: rgbcurve (channels R,
+    G, B; in its linked mode only R is used, for all), tonecurve (L, a, b),
+    colorzones (lightness, chroma, hue: each a curve over the "select by"
+    axis), basecurve (curve). Per channel: type and points [[x, y], ...]."""
+    await _require("curve_get")
+    return await _edit(None, "curve_get", operation=operation, instance=instance)
+
+
+@mcp.tool()
+async def set_curve(operation: str, points: list[list[float]], channel: str | None = None,
+                    type: str | None = None, instance: int = 0) -> dict:
+    """Set one channel's curve of a curve module (rgbcurve, tonecurve,
+    colorzones, basecurve) as dragging its nodes does: points [[x, y], ...]
+    in 0..1 with x increasing (2-20 points). channel as get_curve lists them
+    (default the first). type: "cubic spline", "centripetal spline",
+    "monotonic spline". Turns the module on; one history step. Note that
+    rgbcurve works on scene-linear values: middle gray is near x = 0.18, so
+    an S-curve drawn for display values darkens the photo a lot."""
+    await _require("curve_set")
+    params: dict[str, Any] = {"operation": operation, "instance": instance, "points": points}
+    if channel is not None:
+        params["channel"] = channel
+    if type is not None:
+        params["type"] = type
+    return await _edit(None, "curve_set", **params)
+
+
+@mcp.tool()
+async def duplicate_photo(image_id: int | None = None, virgin: bool = False, save_first: bool = False) -> dict:
+    """Make a duplicate (a new version, a virtual copy of the same raw file)
+    of a photo, as darktable's lighttable does: with its saved edit, or
+    virgin=True for an unedited one. E.g. a B&W version beside the color
+    one: duplicate, open_photo(the new id), convert. If the photo has unsaved
+    changes, save_first=True saves them first (ask the user; they may be
+    theirs). Returns the new photo's library entry."""
+    await _require("image_duplicate")
+    if image_id is None:
+        image_id = engine.image_id
+    if image_id is None:
+        raise ToolError("give image_id, or open a photo first")
+    try:
+        return await engine.call("image_duplicate", imgid=image_id, virgin=virgin, save=save_first)
+    except EngineError as exc:
+        if "unsaved" in str(exc):
+            raise ToolError("the photo has unsaved changes and the duplicate gets the saved edit: save, or "
+                            "pass save_first=True (both save the whole shared edit: ask the user)")
+        raise _err(exc)
 
 
 @mcp.tool()

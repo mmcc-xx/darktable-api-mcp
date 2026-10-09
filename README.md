@@ -29,6 +29,9 @@ owner.
 | `list_presets`, `apply_preset` | a module's presets, applied as darktable's presets menu does (e.g. "monochrome \| luminance-based") |
 | `get_history`, `set_history_end` | history steps; undo/redo to a step |
 | `add_module_instance`, `rename_module_instance`, `remove_module_instance` | module instances (e.g. a second color calibration for creative B&W) |
+| `move_module` | move a module in the pipe (e.g. a second color calibration after the tone mapper) |
+| `get_curve`, `set_curve` | curves of rgbcurve, tonecurve, colorzones, basecurve |
+| `duplicate_photo` | a duplicate (version) of a photo, with its edit or virgin |
 | `compress_history` | compress (or truncate) the history as darktable's history panel does; saves first |
 | `get_geometry`, `rotate_photo`, `crop_photo` | orientation, straightening (with the automatic crop) and crop, through darktable's flip, rotate and perspective, and crop modules |
 | `export_photo` | darktable's export of the saved edit to a file (format, size, quality, output pattern, style; the user's export settings otherwise) |
