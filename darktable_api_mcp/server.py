@@ -40,7 +40,8 @@ render_preview(zoom=1) shows a region at 100% to judge noise, sharpness and
 dust.
 Local edits: get_blending / set_blending (blend mode, opacity, parametric
 ranges, e.g. noise reduction only in the shadows), add_mask / list_masks /
-remove_mask (drawn circle, ellipse, gradient). measure_photo reads values,
+remove_mask (drawn circle, ellipse, gradient), add_ai_mask (darktable's AI
+object mask: click points on a subject, it is outlined). measure_photo reads values,
 histogram and clipping of the rendered photo.
 Instances: add_module_instance (e.g. a second color calibration for creative
 B&W, a second denoise pass), rename_module_instance, remove_module_instance.
@@ -634,6 +635,33 @@ async def add_mask(operation: str, shape: str, x: float, y: float, radius: float
         raise ToolError("shape: circle, ellipse or gradient")
     return await _edit(None, "mask_add", operation=operation, instance=instance, shape=sh,
                        combine=combine, inverted=inverted)
+
+
+@mcp.tool()
+async def add_ai_mask(operation: str, include: list[list[float]], exclude: list[list[float]] | None = None,
+                      combine: str = "union", inverted: bool = False, instance: int = 0) -> dict:
+    """Mask a module to an object with darktable's AI object mask (SAM), as
+    clicking on it with the darkroom's object mask tool: darktable finds the
+    object around the points and traces its outline into path shapes on the
+    module's mask (holes subtracted). One history step.
+
+    include: [[x, y], ...] points on the object, fractions 0-1 of the photo
+             as shown (as render_preview shows it); one is enough.
+    exclude: points that are not part of it (to separate a neighbour).
+    combine/inverted: as add_mask. The first call on a photo takes a few
+    seconds (the photo is encoded); later ones are quick. Returns the
+    group's formid (for remove_mask), how many paths, and the area (fraction
+    of the photo). Check the result with render_preview. Needs darktable
+    built with AI and AI enabled in its preferences."""
+    await _require("mask_ai")
+    points = ([{"x": p[0], "y": p[1], "include": True} for p in include]
+              + [{"x": p[0], "y": p[1], "include": False} for p in (exclude or [])])
+    r = await _edit(None, "mask_ai", operation=operation, instance=instance, points=points,
+                    combine=combine, inverted=inverted)
+    if r.get("area", 0) > 0.8:
+        r["hint"] = ("the mask covers most of the photo: if that isn't the object, remove it "
+                     "(remove_mask) and try again with exclude points around the object")
+    return r
 
 
 @mcp.tool()
