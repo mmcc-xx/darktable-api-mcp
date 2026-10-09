@@ -21,6 +21,7 @@ owner.
 |---|---|
 | `list_film_rolls`, `list_images`, `image_info` | browse: film rolls; photos filtered by film roll, rating, color label, with paging |
 | `get_thumbnail` | darktable's thumbnail of a photo (image) |
+| `get_photo_metadata`, `list_tags`, `set_tags`, `set_metadata`, `set_location` | tags, metadata (title, description, creator, ...) and location, as darktable's tagging, metadata editor and geotagging |
 | `set_rating`, `set_color_label` | rate (0–5), reject, color labels, as darktable's lighttable |
 | `open_photo` | open a photo for editing (joins an edit already open in another app, unsaved changes included) |
 | `open_darkroom_photo` | open the photo the user has open in darktable's darkroom (when darktable's window serves the library) |
@@ -37,7 +38,7 @@ owner.
 | `export_photo` | darktable's export of the saved edit to a file (format, size, quality, output pattern, style; the user's export settings otherwise) |
 | `get_blending`, `set_blending` | a module's blending: blend mode, opacity, parametric ranges per channel in the darkroom's units (e.g. denoise only the shadows) |
 | `add_ai_mask` | darktable's AI object mask: points on a subject, outlined into path shapes on a module (needs darktable built with AI, AI enabled) |
-| `add_mask`, `list_masks`, `remove_mask` | drawn shapes (circle, ellipse, gradient) on a module, placed on the photo as shown |
+| `add_mask`, `list_masks`, `remove_mask` | drawn shapes (circle, ellipse, gradient, path, brush stroke) on a module, placed on the photo as shown; `set_blending(raster_source=...)` reuses another module's mask |
 | `measure_photo` | values at points and in boxes, histograms and clipping of the rendered photo |
 | `ai_denoise`, `job_status`, `list_jobs`, `cancel_job` | darktable's AI raw denoise as a background job: a new DNG photo beside the original, in its group (needs darktable built with AI) |
 | `find_dust_spots`, `heal_dust_spots` | sensor dust: a map of dust recurring across the photo's film roll (read from the raw files, cached), rated in this photo; heal circles in retouch as one history step, checked at 100% before and after. Needs `pip install 'darktable-api-mcp[dust]'` |

@@ -40,7 +40,7 @@ render_preview(zoom=1) shows a region at 100% to judge noise, sharpness and
 dust.
 Local edits: get_blending / set_blending (blend mode, opacity, parametric
 ranges, e.g. noise reduction only in the shadows), add_mask / list_masks /
-remove_mask (drawn circle, ellipse, gradient), add_ai_mask (darktable's AI
+remove_mask (drawn circle, ellipse, gradient, path, brush stroke), add_ai_mask (darktable's AI
 object mask: click points on a subject, it is outlined). measure_photo reads values,
 histogram and clipping of the rendered photo.
 Instances: add_module_instance (e.g. a second color calibration for creative
@@ -59,6 +59,8 @@ roll, rates it in this photo), heal_dust_spots (heal circles in retouch, one
 history step, checked at 100% before/after). Other retouching:
 retouch_spots (clone, heal, blur, fill circles), list_retouch_spots,
 edit_retouch_spot, remove_retouch_spots.
+Library: get_photo_metadata, list_tags, set_tags, set_metadata (title,
+description, ...), set_location.
 Styles and copy/paste: list_styles, create_style, apply_style (e.g. one B&W
 look on a set of photos), delete_style, paste_edit (one photo's edit, or some
 of its modules, onto others). These save the photos they change.
@@ -186,6 +188,79 @@ async def set_color_label(image_id: int, label: str, on: bool = True) -> dict:
 
 
 # ── editing ──────────────────────────────────────────────────────────────────
+
+def _ids(image_ids: list[int] | None) -> list[int]:
+    ids = image_ids or ([engine.image_id] if engine.image_id is not None else None)
+    if not ids:
+        raise ToolError("give image_ids, or open a photo first")
+    return ids
+
+
+@mcp.tool()
+async def get_photo_metadata(image_id: int | None = None) -> dict:
+    """A photo's tags (darktable's own "darktable|..." left out), metadata
+    (title, description, creator, publisher, rights, notes, ... as
+    darktable's metadata editor shows them) and location (latitude,
+    longitude, elevation, or null)."""
+    await _require("image_metadata")
+    params = {"imgid": image_id if image_id is not None else engine.image_id}
+    if params["imgid"] is None:
+        raise ToolError("give image_id, or open a photo first")
+    return await _call("image_metadata", **params)
+
+
+@mcp.tool()
+async def list_tags(filter: str = "") -> dict:
+    """The library's tags (hierarchies with "|", e.g. "places|france|paris")
+    and how many photos carry each; filter matches part of the name."""
+    await _require("tag_list")
+    return await _call("tag_list", filter=filter)
+
+
+@mcp.tool()
+async def set_tags(attach: list[str] | None = None, detach: list[str] | None = None,
+                   image_ids: list[int] | None = None) -> dict:
+    """Attach and/or detach tags on photos (default: the open one), as
+    darktable's tagging module does; new tags are created. Use "|" for a
+    hierarchy ("places|france|paris")."""
+    await _require("set_tags")
+    params: dict[str, Any] = {"imgids": _ids(image_ids)}
+    if attach:
+        params["attach"] = attach
+    if detach:
+        params["detach"] = detach
+    return await _call("set_tags", **params)
+
+
+@mcp.tool()
+async def set_metadata(values: dict[str, str], image_ids: list[int] | None = None) -> dict:
+    """Set metadata fields on photos (default: the open one), as darktable's
+    metadata editor does: e.g. {"title": "...", "description": "...",
+    "creator": "...", "rights": "..."}; "" clears a field. Field names as
+    get_photo_metadata lists them."""
+    await _require("set_metadata")
+    return await _call("set_metadata", imgids=_ids(image_ids), values=values)
+
+
+@mcp.tool()
+async def set_location(latitude: float | None = None, longitude: float | None = None,
+                       elevation: float | None = None, clear: bool = False,
+                       image_ids: list[int] | None = None) -> dict:
+    """Set photos' location (default: the open one), as darktable's
+    geotagging does: latitude and longitude in degrees, elevation in metres
+    (optional); clear=True removes it."""
+    await _require("set_location")
+    params: dict[str, Any] = {"imgids": _ids(image_ids)}
+    if clear:
+        params["clear"] = True
+    else:
+        if latitude is None or longitude is None:
+            raise ToolError("give latitude and longitude, or clear=True")
+        params.update(latitude=latitude, longitude=longitude)
+        if elevation is not None:
+            params["elevation"] = elevation
+    return await _call("set_location", **params)
+
 
 @mcp.tool()
 async def open_photo(image_id: int, discard_unsaved: bool = False) -> dict:
@@ -563,12 +638,24 @@ async def export_photo(image_id: int | None = None, format: str | None = None, s
         if value is not None:
             params[key] = value
     try:
-        return await engine.call("export", **params)
+        if not await engine.supports("export.background"):
+            return await engine.call("export", **params)
     except EngineError as exc:
         if "unsaved" in str(exc):
             raise ToolError("the photo has unsaved changes and export uses the saved edit: save, or pass "
                             "save_first=True (both save the whole shared edit: ask the user)")
         raise _err(exc)
+    # in the background, so other apps using the engine aren't held up
+    try:
+        r = await _run_job(lambda: _call("export", background=True, **params), True, 900)
+    except ToolError as exc:
+        if "unsaved" in str(exc):
+            raise ToolError("the photo has unsaved changes and export uses the saved edit: save, or pass "
+                            "save_first=True (both save the whole shared edit: ask the user)")
+        raise
+    if r.get("state") == "failed":
+        raise ToolError(r.get("error") or "the export failed")
+    return r.get("result") or r
 
 
 @mcp.tool()
@@ -659,7 +746,10 @@ async def set_blending(operation: str, values: dict[str, Any], instance: int = 0
     full, high full, high end], e.g. shadows only on a scene-referred module:
     {"parametric": {"g_in": {"range": [0, 0, 18, 40]}}}; "inverted": true
     flips a range; null switches a channel off. Ranges turn the parametric
-    mask on. Example: denoise only the shadows:
+    mask on. raster_source {"operation", "instance"} uses another module's
+    mask (one earlier in the pipe that has a drawn or parametric mask) as
+    this one's, as the raster mask menu does; null removes it;
+    raster_inverted flips it. Example: denoise only the shadows:
     set_blending("denoiseprofile", {"parametric": {"g_in": {"range": [0, 0, 10, 30]}}})."""
     await _require("blend_set")
     return await _edit(None, "blend_set", operation=operation, values=values, instance=instance)
@@ -671,10 +761,11 @@ async def _photo_to_raw(points: list[list[float]]) -> tuple[list[list[float]], i
 
 
 @mcp.tool()
-async def add_mask(operation: str, shape: str, x: float, y: float, radius: float = 0.1,
-                   radius_y: float | None = None, rotation: float = 0.0, feather: float = 0.05,
-                   compression: float = 0.5, combine: str = "union", inverted: bool = False,
-                   instance: int = 0) -> dict:
+async def add_mask(operation: str, shape: str, x: float | None = None, y: float | None = None,
+                   radius: float = 0.1, radius_y: float | None = None, rotation: float = 0.0,
+                   feather: float = 0.05, compression: float = 0.5, points: list[list[float]] | None = None,
+                   width: float = 0.03, hardness: float = 0.5, density: float = 1.0,
+                   combine: str = "union", inverted: bool = False, instance: int = 0) -> dict:
     """Draw a mask shape on a module, so it only acts there (one history
     step; the module's drawn mask is switched on).
 
@@ -686,9 +777,29 @@ async def add_mask(operation: str, shape: str, x: float, y: float, radius: float
       shape "gradient": a line through x, y at rotation (degrees, 0 =
         horizontal line: the module acts on one side, fading across it);
         compression 0-1 (how wide the fade is).
+      shape "path": a closed outline through points [[x, y], ...] (3 or
+        more), smoothed as darktable's path tool draws it; feather.
+      shape "brush": a stroke along points (2 or more), width (half the
+        stroke's thickness), hardness and density 0-1.
     combine: how it joins the module's earlier shapes (union, intersection,
     difference, exclusion); inverted: the module acts outside it."""
     await _require("mask_add", "coords")
+    if shape in ("path", "brush"):
+        await _require("mask_add.path")
+        brush = shape == "brush"
+        if not points or len(points) < (2 if brush else 3):
+            raise ToolError("path: 3 or more points; brush: 2 or more")
+        raw, _, _ = await _photo_to_raw(points)
+        _, size = await _photo_circle_to_raw(points[0][0], points[0][1], width if brush else feather)
+        sh: dict[str, Any] = {"type": shape, "points": raw}
+        if brush:
+            sh.update(width=size, hardness=hardness, density=density)
+        else:
+            sh["border"] = size
+        return await _edit(None, "mask_add", operation=operation, instance=instance, shape=sh,
+                           combine=combine, inverted=inverted)
+    if x is None or y is None:
+        raise ToolError(f"shape {shape}: needs x and y")
     import math
     g = await _edit(None, "geometry_get")
     W, H = g["width"], g["height"]
@@ -715,7 +826,7 @@ async def add_mask(operation: str, shape: str, x: float, y: float, radius: float
         sh = {"type": "gradient", "x": raw[0][0], "y": raw[0][1], "rotation": rot_raw,
               "compression": max(0.0, min(compression, 1.0))}
     else:
-        raise ToolError("shape: circle, ellipse or gradient")
+        raise ToolError("shape: circle, ellipse, gradient, path or brush")
     return await _edit(None, "mask_add", operation=operation, instance=instance, shape=sh,
                        combine=combine, inverted=inverted)
 
@@ -737,6 +848,11 @@ async def add_ai_mask(operation: str, include: list[list[float]], exclude: list[
     of the photo). Check the result with render_preview. Needs darktable
     built with AI and AI enabled in its preferences."""
     await _require("mask_ai")
+    if await engine.supports("mask_ai_encode"):
+        # the slow first step (encoding the photo) in the background
+        enc = await _run_job(lambda: _edit(None, "mask_ai_encode"), True, 600)
+        if enc.get("state") not in ("done", None):
+            raise ToolError(enc.get("error") or f"encoding the photo for AI masks ended {enc.get('state')}")
     points = ([{"x": p[0], "y": p[1], "include": True} for p in include]
               + [{"x": p[0], "y": p[1], "include": False} for p in (exclude or [])])
     r = await _edit(None, "mask_ai", operation=operation, instance=instance, points=points,
