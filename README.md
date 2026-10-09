@@ -22,7 +22,7 @@ owner.
 | `list_film_rolls`, `list_images`, `image_info` | browse: film rolls; photos filtered by film roll, rating, color label, with paging |
 | `get_thumbnail` | darktable's thumbnail of a photo (image) |
 | `set_rating`, `set_color_label` | rate (0–5), reject, color labels, as darktable's lighttable |
-| `open_photo` | open a photo for editing (one at a time) |
+| `open_photo` | open a photo for editing (joins an edit already open in another app, unsaved changes included) |
 | `list_modules`, `get_module` | the photo's modules; a module's settings with values, defaults, ranges and dropdown values |
 | `set_module`, `enable_module` | change settings by name (checked, all or nothing), module on/off |
 | `get_history`, `set_history_end` | history steps; undo/redo to a step |
@@ -70,6 +70,7 @@ photos are only read.
 | `DTAPI_BIN` | required unless on the PATH | the `darktable-api` binary |
 | `DTAPI_CONFIGDIR` | required | the darktable config dir to use: the copy's `config` folder |
 | `DTAPI_CACHEDIR` | default: next to it, `cache` | the engine's darktable cache |
+| `DTAPI_SOCKET` | default: `darktable-api.sock` next to the config dir (or `/tmp/darktable-api-<uid>-<hash>.sock` if that path is too long) | where the engine listens; every app using the library must use the same one |
 | `DTAPI_GUI_BIN` | default: `darktable` next to `DTAPI_BIN` | the only darktable `takeover_library` may quit |
 
 ### Claude Code
@@ -95,13 +96,20 @@ photos are only read.
 }
 ```
 
-## One engine per library
+## Sharing the engine with a web app
 
-The engine holds the library's lock, as darktable does. Two programs can't
-use one library copy at the same time: not darktable's GUI (use
-`release_library` / `acquire_library`), and not another darktable-api user
-such as [darktable-api-web](https://github.com/mmcc-xx/darktable-api-web).
-Give each its own copy.
+The server doesn't run darktable itself: it connects to a darktable-api
+engine on a unix socket next to the library copy, and starts one if none is
+running. [darktable-api-web](https://github.com/mmcc-xx/darktable-api-web)
+pointed at the same library copy uses the same engine, so you can watch in
+the browser while the AI edits, and both work on the same photos: a photo
+open in both is one shared edit (`open_photo` reports `"shared": true`), the
+web page updates live, and `save` saves the whole edit. The engine keeps up
+to 3 photos open and stops 10 minutes after the last client disconnected,
+unless something is unsaved.
+
+darktable's GUI can't open the library while the engine has it: use
+`release_library` / `acquire_library`.
 
 Tested on macOS. On Linux, `takeover_library` uses darktable's D-Bus `Quit`
 method (untested).

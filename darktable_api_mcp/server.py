@@ -29,8 +29,13 @@ white balance in color calibration (channelmixerrgb), then the tone mapper
 (toneequal) and color balance rgb (colorbalancergb). Use get_module to learn a
 module's setting names, ranges and dropdown values before set_module.
 
-One photo is open at a time. While the library is released to darktable's
-GUI, only library_status, acquire_library and takeover_library work."""
+The engine is shared: the user may be looking at or editing the same photo
+in a web app at the same time. open_photo joins an edit already open there,
+including its unsaved changes; changes made here show up for the user right
+away, and save saves the photo's whole edit (theirs too). Tell the user what
+you are doing. One photo is "current" for these tools at a time (the last
+open_photo). While the library is released to darktable's GUI, only
+library_status, acquire_library and takeover_library work."""
 
 mcp = FastMCP("darktable-api", instructions=INSTRUCTIONS, log_level="WARNING")
 
@@ -129,19 +134,22 @@ async def set_color_label(image_id: int, label: str, on: bool = True) -> dict:
 
 @mcp.tool()
 async def open_photo(image_id: int, discard_unsaved: bool = False) -> dict:
-    """Open a photo for editing (one at a time) and list its modules and
-    history. If it is already open, its unsaved changes are kept unless
-    discard_unsaved=True. Opening another photo drops unsaved changes of the
-    current one: save first."""
+    """Open a photo for editing and make it the current photo for the editing
+    tools; lists its modules and history. If the photo is already open (by
+    you earlier, or by the user in another app), this joins that edit with its
+    unsaved changes ("unsaved": true); discard_unsaved=True reloads it as
+    saved instead, dropping those changes for everyone (ask the user first).
+    Photos you opened before stay open, with their unsaved changes, until
+    saved; the engine keeps a few open at once."""
     try:
-        if discard_unsaved or engine.image_id != image_id:
-            await engine.open(image_id)
+        opened = await engine.open(image_id, fresh=discard_unsaved)
         mods = await engine.edit(image_id, "module_list")
         hist = await engine.edit(image_id, "history_list")
         info = await engine.call("image_info", imgid=image_id)
     except EngineError as exc:
         raise _err(exc)
-    return {"image": info.get("image"),
+    return {"image": info.get("image"), "unsaved": opened.get("unsaved"),
+            "shared": opened.get("joined"),
             "modules": [m for m in mods["modules"] if m["in_history"] or m["enabled"]],
             "history_end": hist["history_end"], "history_items": len(hist["items"])}
 
