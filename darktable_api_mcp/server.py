@@ -56,7 +56,16 @@ DNG photo beside the original, in its group; edit that one). It runs as a
 background job: job_status / list_jobs / cancel_job.
 Sensor dust: find_dust_spots (maps dust that recurs across the photo's film
 roll, rates it in this photo), heal_dust_spots (heal circles in retouch, one
-history step, checked at 100% before/after).
+history step, checked at 100% before/after). Other retouching:
+retouch_spots (clone, heal, blur, fill circles), list_retouch_spots,
+edit_retouch_spot, remove_retouch_spots.
+Styles and copy/paste: list_styles, create_style, apply_style (e.g. one B&W
+look on a set of photos), delete_style, paste_edit (one photo's edit, or some
+of its modules, onto others). These save the photos they change.
+Pickers and auto buttons (exposure's picker, color calibration's white
+balance picker, AgX's auto tune levels, tone equalizer's wands, ...):
+list_pickers / use_picker, on the photo in darktable's darkroom only (with
+darktable's window serving the library).
 
 The engine is shared: the user may be looking at or editing the same photo
 in a web app at the same time. open_photo joins an edit already open there,
@@ -764,6 +773,193 @@ async def remove_mask(operation: str, formid: int, instance: int = 0) -> dict:
     return await _edit(None, "mask_remove", operation=operation, formid=formid, instance=instance)
 
 
+# ── retouch ──────────────────────────────────────────────────────────────────
+
+_RT_OPTIONS = ("blur_type", "blur_radius", "fill_mode", "fill_color", "fill_brightness")
+
+
+async def _photo_circle_to_raw(x: float, y: float, radius: float) -> tuple[list[float], float]:
+    """A circle on the photo as shown (x, y fractions; radius a fraction of
+    the shorter side) in darktable's raw space: center, radius relative to
+    the raw's shorter side."""
+    import math
+    g = await _edit(None, "geometry_get")
+    short = min(g["width"], g["height"])
+    raw, rw, rh = await _photo_to_raw([[x, y], [x + radius * short / g["width"], y]])
+    r = math.hypot((raw[1][0] - raw[0][0]) * rw, (raw[1][1] - raw[0][1]) * rh) / min(rw, rh)
+    return raw[0], r
+
+
+async def _retouch_spec(spot: dict, adding: bool) -> dict:
+    spec: dict[str, Any] = {}
+    if "tool" in spot:
+        spec["algorithm"] = spot["tool"]
+    for k in _RT_OPTIONS:
+        if k in spot:
+            spec[k] = spot[k]
+    if "x" in spot or "y" in spot or "radius" in spot:
+        if adding or ("x" in spot and "y" in spot and "radius" in spot):
+            (spec["x"], spec["y"]), spec["r"] = await _photo_circle_to_raw(spot["x"], spot["y"], spot["radius"])
+        else:
+            raise ToolError("moving or resizing a spot takes x, y and radius together")
+    if "source_x" in spot or "source_y" in spot:
+        if "source_x" not in spot or "source_y" not in spot:
+            raise ToolError("source_x and source_y go together")
+        (spec["sx"], spec["sy"]), _ = await _photo_circle_to_raw(spot["source_x"], spot["source_y"], 0.01)
+    return spec
+
+
+@mcp.tool()
+async def list_retouch_spots() -> dict:
+    """The retouch module's spots: formid (for edit_retouch_spot and
+    remove_retouch_spots), tool (clone, heal, blur, fill) with its options,
+    and where it is on the photo (on_photo: x, y fractions; source_on_photo
+    for clone and heal)."""
+    await _require("retouch_list", "coords")
+    r = await _edit(None, "retouch_list")
+    pts = []
+    for s in r["spots"]:
+        if "x" in s:
+            pts.append([s["x"], s["y"]])
+        if s.get("algorithm") in ("DT_IOP_RETOUCH_CLONE", "DT_IOP_RETOUCH_HEAL"):
+            pts.append([s["sx"], s["sy"]])
+    img = iter((await _edit(None, "coords", points=pts, **{"from": "raw", "to": "image"}))["points"]
+               if pts else [])
+    for s in r["spots"]:
+        if "x" in s:
+            s["on_photo"] = [round(v, 4) for v in next(img)]
+        if s.get("algorithm") in ("DT_IOP_RETOUCH_CLONE", "DT_IOP_RETOUCH_HEAL"):
+            s["source_on_photo"] = [round(v, 4) for v in next(img)]
+        s.pop("sx", None)
+        s.pop("sy", None)
+        if s.get("algorithm"):
+            s["tool"] = s.pop("algorithm").removeprefix("DT_IOP_RETOUCH_").lower()
+    return r
+
+
+@mcp.tool()
+async def retouch_spots(spots: list[dict]) -> dict:
+    """Add spots to the retouch module, as its circle tool does, all in one
+    history step. Each spot: {x, y, radius, tool, ...} on the photo as shown
+    (x, y fractions 0-1; radius a fraction of the shorter side, e.g. 0.01).
+      tool "heal" (default) or "clone": copies from source_x, source_y
+        (required; heal blends the copy into its surroundings);
+      tool "blur": blur_radius (0.1-200, default the module's), blur_type
+        ("gaussian" or "bilateral");
+      tool "fill": fill_mode ("erase" or "color"), fill_color [r, g, b]
+        (0-1, the module's working RGB), fill_brightness (-1 to 1).
+    Returns the new spots' formids. For sensor dust, heal_dust_spots finds
+    and heals them for you."""
+    await _require("retouch_add", "coords")
+    specs = [await _retouch_spec(s, adding=True) for s in spots]
+    return await _edit(None, "retouch_add", spots=specs)
+
+
+@mcp.tool()
+async def edit_retouch_spot(formid: int, x: float | None = None, y: float | None = None,
+                            radius: float | None = None, source_x: float | None = None,
+                            source_y: float | None = None, tool: str | None = None,
+                            options: dict[str, Any] | None = None) -> dict:
+    """Move, resize or change one retouch spot (formid from
+    list_retouch_spots). x, y and radius go together (on the photo as shown,
+    as retouch_spots); source_x/source_y move a clone or heal source. tool
+    swaps clone and heal, or blur and fill (the darkroom allows the same).
+    options: blur_radius, blur_type, fill_mode, fill_color, fill_brightness."""
+    await _require("retouch_set", "coords")
+    spot: dict[str, Any] = {k: v for k, v in (("x", x), ("y", y), ("radius", radius), ("source_x", source_x),
+                                               ("source_y", source_y), ("tool", tool)) if v is not None}
+    spot.update(options or {})
+    spec = await _retouch_spec(spot, adding=False)
+    return await _edit(None, "retouch_set", formid=formid, **spec)
+
+
+@mcp.tool()
+async def remove_retouch_spots(formids: list[int]) -> dict:
+    """Delete retouch spots (formids from list_retouch_spots), as one
+    history step."""
+    await _require("retouch_remove")
+    return await _edit(None, "retouch_remove", formids=formids)
+
+
+# ── styles and copy/paste ────────────────────────────────────────────────────
+
+@mcp.tool()
+async def list_styles(filter: str = "", camera_styles: bool = False) -> dict:
+    """darktable's styles (saved sets of module settings): name, description,
+    the modules each holds, and whether it sets the module order. name is
+    what apply_style takes; label is how darktable shows it. filter matches
+    names. darktable's built-in camera styles (base curves per
+    camera model, hundreds) are left out unless camera_styles."""
+    await _require("style_list")
+    r = await _call("style_list", filter=filter)
+    styles = [{"name": st["name"], "label": st.get("label", st["name"]), "description": st["description"],
+               "modules": [i["operation"] + (f" {i['instance']}" if i["instance"] else "") for i in st["items"]],
+               "module_order": st["module_order"]}
+              for st in r["styles"] if camera_styles or "_l10n_camera styles" not in st["name"]]
+    return {"styles": styles, "camera_styles_left_out": len(r["styles"]) - len(styles)}
+
+
+@mcp.tool()
+async def create_style(name: str, image_id: int | None = None, modules: list | None = None,
+                       description: str = "", module_order: bool = False) -> dict:
+    """Make a style from a photo's saved edit (default: the open photo; save
+    first). Without modules it takes those darktable's create style dialog
+    ticks by default (the modules meant for styles); modules picks some:
+    names ("channelmixerrgb") or {"operation", "instance"}. module_order
+    also stores the photo's module order."""
+    await _require("style_create")
+    params: dict[str, Any] = {"name": name, "description": description, "module_order": module_order}
+    if image_id is not None:
+        params["imgid"] = image_id
+    elif engine.image_id is not None:
+        params["imgid"] = engine.image_id
+    if modules:
+        params["modules"] = modules
+    return await _call("style_create", **params)
+
+
+@mcp.tool()
+async def apply_style(name: str, image_ids: list[int] | None = None, save_first: bool = False) -> dict:
+    """Apply a style to photos (default: the open one), as darktable's
+    lighttable and darkroom do: its modules are added to each edit as new
+    history steps, and the result is saved. A photo with unsaved changes
+    here is refused unless save_first (those changes are saved with it).
+    Undo: set_history_end."""
+    await _require("style_apply")
+    ids = image_ids or ([engine.image_id] if engine.image_id is not None else None)
+    if not ids:
+        raise ToolError("give image_ids, or open a photo first")
+    return await _call("style_apply", name=name, imgids=ids, save=save_first)
+
+
+@mcp.tool()
+async def delete_style(name: str) -> dict:
+    """Delete a style from darktable."""
+    await _require("style_delete")
+    return await _call("style_delete", name=name)
+
+
+@mcp.tool()
+async def paste_edit(from_image_id: int, image_ids: list[int] | None = None, mode: str = "append",
+                     modules: list | None = None, module_order: bool = False,
+                     save_first: bool = False) -> dict:
+    """Copy one photo's saved edit onto others (default: the open photo), as
+    darktable's copy and paste: all of it, or only modules (names or
+    {"operation", "instance"}, as selective copy). mode "append" adds to
+    each edit, "overwrite" replaces it. The result is saved; a target with
+    unsaved changes here is refused unless save_first. module_order also
+    copies the module order."""
+    await _require("history_paste")
+    ids = image_ids or ([engine.image_id] if engine.image_id is not None else None)
+    if not ids:
+        raise ToolError("give image_ids, or open a photo first")
+    params: dict[str, Any] = {"from": from_image_id, "imgids": ids, "mode": mode,
+                              "module_order": module_order, "save": save_first}
+    if modules:
+        params["modules"] = modules
+    return await _call("history_paste", **params)
+
+
 # ── sensor dust ──────────────────────────────────────────────────────────────
 
 def _dust_module():
@@ -1008,6 +1204,34 @@ async def heal_dust_spots(image_id: int | None = None, spots: list[int] | None =
 
 # ── background jobs ──────────────────────────────────────────────────────────
 
+async def _run_job(start, wait: bool, timeout_s: float) -> dict:
+    """Starts a job (start() returns the engine's reply) and, with wait,
+    waits for its "job" event."""
+    done: dict = {}
+    finished = asyncio.Event()
+
+    def listener(ev: dict) -> None:
+        if ev.get("type") == "job" and ev.get("job") == done.get("job"):
+            done["event"] = ev
+            finished.set()
+
+    engine.add_listener(listener)          # before starting: it can end fast
+    try:
+        j = await start()
+        done["job"] = j["job"]
+        if not wait or j.get("state") != "running":
+            return j
+        if "event" not in done:
+            try:
+                await asyncio.wait_for(finished.wait(), timeout_s)
+            except asyncio.TimeoutError:
+                return {**await _call("job_status", job=j["job"]),
+                        "note": "still running: job_status(job) later, or cancel_job(job)"}
+        return done["event"]
+    finally:
+        engine.remove_listener(listener)
+
+
 @mcp.tool()
 async def ai_denoise(image_id: int | None = None, strength: float | None = None, wait: bool = True,
                      timeout_s: int = 600) -> dict:
@@ -1032,37 +1256,51 @@ async def ai_denoise(image_id: int | None = None, strength: float | None = None,
     params: dict[str, Any] = {"imgid": image_id}
     if strength is not None:
         params["strength"] = max(0.0, min(strength, 1.0))
-    done: dict = {}
-    finished = asyncio.Event()
+    return await _run_job(lambda: _call("ai_denoise", **params), wait, timeout_s)
 
-    def listener(ev: dict) -> None:
-        if ev.get("type") == "job" and ev.get("job") == done.get("job"):
-            done["event"] = ev
-            finished.set()
 
-    engine.add_listener(listener)          # before starting: it can end fast
-    try:
-        j = await _call("ai_denoise", **params)
-        done["job"] = j["job"]
-        if not wait:
-            return j
-        if j.get("state") != "running":
-            return j
-        try:
-            await asyncio.wait_for(finished.wait(), timeout_s)
-        except asyncio.TimeoutError:
-            return {**await _call("job_status", job=j["job"]),
-                    "note": "still running: job_status(job) later, or cancel_job(job)"}
-        return done["event"]
-    finally:
-        engine.remove_listener(listener)
+# ── pickers and auto buttons (darktable's window) ────────────────────────────
+
+@mcp.tool()
+async def list_pickers(operation: str, instance: int = 0) -> dict:
+    """A module's color pickers and auto buttons, as darktable's darkroom
+    shows them: name (for use_picker; e.g. exposure "exposure", agx
+    "exposure range/auto tune levels", channelmixerrgb "picker" (white
+    balance from an area), colorbalancergb "white fulcrum", toneequal "mask
+    exposure compensation" (its wand), rgblevels "auto levels") and kind
+    (picker or button). Only for the photo in darktable's darkroom, with
+    darktable's window serving the library (open_darkroom_photo)."""
+    await _require("picker_list")
+    return await _edit(None, "picker_list", operation=operation, instance=instance)
+
+
+@mcp.tool()
+async def use_picker(operation: str, control: str, box: dict | None = None, point: list[float] | None = None,
+                     instance: int = 0, wait: bool = True, timeout_s: float = 60) -> dict:
+    """Use a module's picker or auto button (name from list_pickers) on the
+    photo in darktable's darkroom, exactly as clicking it there: darktable
+    samples the area and sets the module (e.g. exposure from a midtone area,
+    white balance from a neutral area, AgX's levels from the whole photo).
+    box {left, top, right, bottom} or point [x, y]: fractions 0-1 of the
+    photo as shown; without either, darktable's default area (nearly the
+    whole photo). Buttons take no area. Returns which settings changed
+    (result.changed). One history step in darktable's history. Runs as a
+    job that ends when darktable has applied it (usually well under a
+    second; the first use may wait for darktable to load the photo)."""
+    await _require("picker_apply")
+    params: dict[str, Any] = {"operation": operation, "instance": instance, "control": control}
+    if box is not None:
+        params["box"] = box
+    if point is not None:
+        params["point"] = point
+    return await _run_job(lambda: _edit(None, "picker_apply", **params), wait, timeout_s)
 
 
 @mcp.tool()
 async def job_status(job: int) -> dict:
-    """A background job (from ai_denoise): state (running, done, failed,
-    cancelled), progress (when known), and its result (new_imgid, file) or
-    error."""
+    """A background job (ai_denoise, use_picker): state (running, done,
+    failed, cancelled), progress (when known), and its result (ai_denoise:
+    new_imgid, file; use_picker: result.changed) or error."""
     await _require("job_status")
     return await _call("job_status", job=job)
 

@@ -41,6 +41,10 @@ owner.
 | `measure_photo` | values at points and in boxes, histograms and clipping of the rendered photo |
 | `ai_denoise`, `job_status`, `list_jobs`, `cancel_job` | darktable's AI raw denoise as a background job: a new DNG photo beside the original, in its group (needs darktable built with AI) |
 | `find_dust_spots`, `heal_dust_spots` | sensor dust: a map of dust recurring across the photo's film roll (read from the raw files, cached), rated in this photo; heal circles in retouch as one history step, checked at 100% before and after. Needs `pip install 'darktable-api-mcp[dust]'` |
+| `retouch_spots`, `list_retouch_spots`, `edit_retouch_spot`, `remove_retouch_spots` | retouch circles that clone, heal, blur or fill, placed on the photo as shown; move, resize, change or delete them |
+| `list_styles`, `create_style`, `apply_style`, `delete_style` | darktable's styles: make one from a photo's edit, apply one to photos (e.g. one B&W look on a set), as the lighttable does |
+| `paste_edit` | one photo's edit, or some of its modules, onto other photos (append or overwrite), as darktable's copy and paste |
+| `list_pickers`, `use_picker` | a module's color pickers and auto buttons (exposure's picker, color calibration's white balance picker, AgX's auto tune levels, tone equalizer's wands, ...), used as clicking them in darktable: on the photo in darktable's darkroom, with darktable's window serving the library |
 | `render_preview` | darktable's rendering of the current, unsaved edit (image); `uncropped=True` shows the whole photo to choose a crop on; `zoom=1` a region at 100%; `history_step` an earlier step (before/after) |
 | `save`, `discard_changes`, `start_over` | write the edit to the library; reopen as saved; delete the edit and apply darktable's defaults again (asks for `confirm`) |
 | `library_status`, `release_library`, `acquire_library`, `takeover_library` | hand the library to darktable's GUI and take it back; `takeover_library` asks a running darktable to quit the normal way (asks for `confirm`, never kills it) |
