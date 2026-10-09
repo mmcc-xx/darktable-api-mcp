@@ -328,7 +328,13 @@ async def set_module(operation: str, values: dict[str, Any], instance: int = 0) 
     whole, as nested lists of their shape ({"grey": [0.3, 0.6, 0.1, 0]}), or
     one element by index ({"grey[1]": 0.6}, {"x[0][3]": 0.5}). All values
     are checked first: one bad value changes nothing. Turns the module on and
-    adds a history step, as darktable's darkroom does. Not saved until save."""
+    adds a history step, as darktable's darkroom does. Not saved until save.
+    On the photo in darktable's darkroom, darktable then adjusts related
+    settings as it does when a control is moved (e.g. AgX keeps its pivot,
+    exposure keeps black below white); darktable_also_changed in the reply
+    lists them. Headless (no darktable window) that doesn't happen: check
+    related settings yourself (e.g. exposure's mode must be manual for
+    exposure to apply)."""
     if any("[" in k or isinstance(v, list) for k, v in values.items()):
         await _require("module_set.lists")
     return await _edit(None, "module_set", operation=operation, values=values, instance=instance)
