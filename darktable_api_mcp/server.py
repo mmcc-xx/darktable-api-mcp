@@ -38,6 +38,10 @@ Presets: list_presets / apply_preset (e.g. color calibration's "monochrome |
 luminance-based" for black and white, denoise (profiled) presets).
 render_preview(zoom=1) shows a region at 100% to judge noise, sharpness and
 dust.
+Local edits: get_blending / set_blending (blend mode, opacity, parametric
+ranges, e.g. noise reduction only in the shadows), add_mask / list_masks /
+remove_mask (drawn circle, ellipse, gradient). measure_photo reads values,
+histogram and clipping of the rendered photo.
 Sensor dust: find_dust_spots (maps dust that recurs across the photo's film
 roll, rates it in this photo), heal_dust_spots (heal circles in retouch, one
 history step, checked at 100% before/after).
@@ -454,6 +458,150 @@ async def start_over(confirm: bool = False) -> dict:
     if not confirm:
         raise ToolError("start_over deletes the whole edit: ask the user, then pass confirm=True")
     return await _edit(None, "reset")
+
+
+# ── readouts ─────────────────────────────────────────────────────────────────
+
+@mcp.tool()
+async def measure_photo(points: list[list[float]] | None = None, boxes: list[dict] | None = None,
+                        radius: int = 2, size: int = 1024, zoom: float | None = None,
+                        center_x: float = 0.5, center_y: float = 0.5, bins: int = 32) -> dict:
+    """Read the open photo as darktable renders it (display sRGB output, as
+    the darkroom shows it; not values inside the pipe).
+
+    points: [[x, y], ...] fractions of the photo: the color there, averaged
+            over a (2*radius+1)^2 pixel square: rgb (0-1), lab, luminance
+            min/max (linear 0-1). null if outside what was rendered.
+    boxes: [{left, top, right, bottom}] fractions: the same over each box.
+    Also histograms (red, green, blue, luminance; bins) and the fraction of
+    pixels clipped in the highlights (a channel at 255) and shadows (all 0).
+    size: the render's size; zoom/center_x/center_y as render_preview, to
+    measure at 100% (points outside the region come back null)."""
+    await _require("sample")
+    if engine.image_id is None:
+        raise ToolError("no photo is open: call open_photo(image_id) first")
+    params: dict[str, Any] = {"width": max(64, min(size, 4096)), "height": max(64, min(size, 4096)),
+                              "radius": max(0, min(radius, 200)), "bins": max(2, min(bins, 256)),
+                              "points": points or [], "boxes": boxes or []}
+    if zoom is not None:
+        params.update(zoom=max(0.01, min(zoom, 2.0)), center_x=center_x, center_y=center_y)
+    return await _edit(None, "sample", **params)
+
+
+# ── blending and masks ───────────────────────────────────────────────────────
+
+@mcp.tool()
+async def get_blending(operation: str, instance: int = 0) -> dict:
+    """A module's blending (the section under each module in the darkroom):
+    masks (off, uniform, drawn, parametric, drawn & parametric, raster),
+    blend_mode, reverse, opacity (0-100), blend_parameter, feathering_radius,
+    blur_radius, brightness, contrast, details, combine, feathering_guide,
+    drawn_shapes (count), the parametric ranges that are on, and the
+    channels this module's color space offers (e.g. g, R, G, B, Jz, Cz, hz for
+    scene-referred RGB modules; L, a, b, C, h for Lab ones)."""
+    await _require("blend_get")
+    return await _edit(None, "blend_get", operation=operation, instance=instance)
+
+
+@mcp.tool()
+async def set_blending(operation: str, values: dict[str, Any], instance: int = 0) -> dict:
+    """Change a module's blending, all or nothing, as one history step.
+
+    values: any of masks, blend_mode (e.g. "normal", "multiply", "lighten"),
+    reverse, opacity (0-100), blend_parameter, feathering_radius (0-250),
+    blur_radius (0-100), brightness, contrast, details (-1..1), combine
+    ("exclusive", "inclusive", "exclusive & inverted", "inclusive &
+    inverted"), feathering_guide, and parametric: ranges per channel and
+    direction, in the darkroom's units (percent for gray/RGB/L/chroma,
+    -128..128 for Lab a/b, degrees for hue), as four values [low end, low
+    full, high full, high end], e.g. shadows only on a scene-referred module:
+    {"parametric": {"g_in": {"range": [0, 0, 18, 40]}}}; "inverted": true
+    flips a range; null switches a channel off. Ranges turn the parametric
+    mask on. Example: denoise only the shadows:
+    set_blending("denoiseprofile", {"parametric": {"g_in": {"range": [0, 0, 10, 30]}}})."""
+    await _require("blend_set")
+    return await _edit(None, "blend_set", operation=operation, values=values, instance=instance)
+
+
+async def _photo_to_raw(points: list[list[float]]) -> tuple[list[list[float]], int, int]:
+    r = await _edit(None, "coords", points=points, **{"from": "image", "to": "raw"})
+    return r["points"], r["raw_width"], r["raw_height"]
+
+
+@mcp.tool()
+async def add_mask(operation: str, shape: str, x: float, y: float, radius: float = 0.1,
+                   radius_y: float | None = None, rotation: float = 0.0, feather: float = 0.05,
+                   compression: float = 0.5, combine: str = "union", inverted: bool = False,
+                   instance: int = 0) -> dict:
+    """Draw a mask shape on a module, so it only acts there (one history
+    step; the module's drawn mask is switched on).
+
+    Positions and sizes are on the photo as shown: x, y fractions 0-1 of the
+    photo; radius and feather fractions of the photo's shorter side.
+      shape "circle": x, y, radius, feather.
+      shape "ellipse": x, y, radius (horizontal), radius_y (vertical),
+        rotation (degrees), feather.
+      shape "gradient": a line through x, y at rotation (degrees, 0 =
+        horizontal line: the module acts on one side, fading across it);
+        compression 0-1 (how wide the fade is).
+    combine: how it joins the module's earlier shapes (union, intersection,
+    difference, exclusion); inverted: the module acts outside it."""
+    await _require("mask_add", "coords")
+    import math
+    g = await _edit(None, "geometry_get")
+    W, H = g["width"], g["height"]
+    short = min(W, H)
+    # map the center and points along each radius to raw space: sizes and
+    # directions follow the photo's rotation, crop and lens correction
+    a = math.radians(rotation)
+    dx = [math.cos(a) * short / W, math.sin(a) * short / H]
+    probes = [[x, y], [x + radius * dx[0], y + radius * dx[1]],
+              [x - (radius_y or radius) * dx[1] * H / W, y + (radius_y or radius) * dx[0] * W / H],
+              [x + feather * dx[0], y + feather * dx[1]]]
+    raw, rw, rh = await _photo_to_raw(probes)
+    rshort = min(rw, rh)
+    def dist(p, q):
+        return math.hypot((p[0] - q[0]) * rw, (p[1] - q[1]) * rh) / rshort
+    rot_raw = math.degrees(math.atan2((raw[1][1] - raw[0][1]) * rh, (raw[1][0] - raw[0][0]) * rw))
+    if shape == "circle":
+        sh = {"type": "circle", "x": raw[0][0], "y": raw[0][1], "r": dist(raw[0], raw[1]),
+              "border": dist(raw[0], raw[3])}
+    elif shape == "ellipse":
+        sh = {"type": "ellipse", "x": raw[0][0], "y": raw[0][1], "ra": dist(raw[0], raw[1]),
+              "rb": dist(raw[0], raw[2]), "rotation": rot_raw, "border": dist(raw[0], raw[3])}
+    elif shape == "gradient":
+        sh = {"type": "gradient", "x": raw[0][0], "y": raw[0][1], "rotation": rot_raw,
+              "compression": max(0.0, min(compression, 1.0))}
+    else:
+        raise ToolError("shape: circle, ellipse or gradient")
+    return await _edit(None, "mask_add", operation=operation, instance=instance, shape=sh,
+                       combine=combine, inverted=inverted)
+
+
+@mcp.tool()
+async def list_masks(operation: str, instance: int = 0) -> dict:
+    """The drawn shapes on a module's mask: formid (for remove_mask), name,
+    type, combine, inverted, and where it is on the photo (x, y fractions)."""
+    await _require("mask_list", "coords")
+    r = await _edit(None, "mask_list", operation=operation, instance=instance)
+    pts = [[s["x"], s["y"]] for s in r["shapes"] if "x" in s]
+    if pts:
+        img = (await _edit(None, "coords", points=pts, **{"from": "raw", "to": "image"}))["points"]
+        it = iter(img)
+        for s in r["shapes"]:
+            if "x" in s:
+                u, v = next(it)
+                s["on_photo"] = [round(u, 4), round(v, 4)]
+                del s["x"], s["y"]
+    return r
+
+
+@mcp.tool()
+async def remove_mask(operation: str, formid: int, instance: int = 0) -> dict:
+    """Take a shape (formid from list_masks) off a module's mask, as one
+    history step."""
+    await _require("mask_remove")
+    return await _edit(None, "mask_remove", operation=operation, formid=formid, instance=instance)
 
 
 # ── sensor dust ──────────────────────────────────────────────────────────────
