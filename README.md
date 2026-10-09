@@ -1,0 +1,111 @@
+# darktable-api-mcp
+
+An [MCP](https://modelcontextprotocol.io) server that lets an AI assistant
+(Claude, or any MCP client) browse a [darktable](https://www.darktable.org/)
+library and edit photos. All the work is done by **darktable-api**, a
+long-running headless darktable built from darktable's own code: it renders
+previews, applies module settings and writes the history to the library
+exactly as darktable does. No darktable window, Lua script or XMP editing is
+involved.
+
+**Experimental.** Use it on a copy of your library (the copy script below
+does that). Saving writes darktable's history in the engine's module
+versions, which an older darktable may not be able to read.
+
+Written with AI assistance (Claude), directed and reviewed by the repository
+owner.
+
+## Tools
+
+| Tool | Does |
+|---|---|
+| `list_film_rolls`, `list_images`, `image_info` | browse: film rolls; photos filtered by film roll, rating, color label, with paging |
+| `get_thumbnail` | darktable's thumbnail of a photo (image) |
+| `set_rating`, `set_color_label` | rate (0–5), reject, color labels, as darktable's lighttable |
+| `open_photo` | open a photo for editing (one at a time) |
+| `list_modules`, `get_module` | the photo's modules; a module's settings with values, defaults, ranges and dropdown values |
+| `set_module`, `enable_module` | change settings by name (checked, all or nothing), module on/off |
+| `get_history`, `set_history_end` | history steps; undo/redo to a step |
+| `render_preview` | darktable's rendering of the current, unsaved edit (image) |
+| `save`, `discard_changes`, `start_over` | write the edit to the library; reopen as saved; delete the edit and apply darktable's defaults again (asks for `confirm`) |
+| `library_status`, `release_library`, `acquire_library`, `takeover_library` | hand the library to darktable's GUI and take it back; `takeover_library` asks a running darktable to quit the normal way (asks for `confirm`, never kills it) |
+
+Edits stay in memory until `save`. Errors come back as MCP tool errors with
+darktable's message, e.g. `'exposure': 99 is outside -18..18`.
+
+Measured on an Apple M1 (CPU only) with a 20 MP raw: `render_preview` after a
+change 0.15–0.4 s at 1200 px; browsing calls a few milliseconds; the engine
+starts in about 3 s on the first call.
+
+## Requirements
+
+1. **darktable-api**, from the `darktable-api` branch of the darktable fork:
+   https://github.com/mmcc-xx/darktable/tree/darktable-api
+   (see `src/api/README.md` there). Build darktable with the MCP server
+   enabled, which builds `darktable-api` alongside:
+
+       git clone -b darktable-api --recurse-submodules https://github.com/mmcc-xx/darktable.git
+       cd darktable
+       cmake -B build -G Ninja -DUSE_MCP=ON
+       cmake --build build --target darktable-api darktable
+
+   darktable's README lists the build dependencies (on macOS:
+   `brew bundle --file=.ci/Brewfile`).
+2. Python 3.10 or later.
+
+## Install
+
+    git clone https://github.com/mmcc-xx/darktable-api-mcp.git
+    cd darktable-api-mcp
+    python -m venv .venv && .venv/bin/pip install -e .
+    .venv/bin/python make_library_copy.py      # ~/.config/darktable -> ./library-copy
+
+`make_library_copy.py` copies `library.db`, `data.db` and `darktablerc`
+(safe while darktable is running) and sets `write_sidecar_files=never` in the
+copy, so nothing done here touches the XMP files next to your photos. Your
+photos are only read.
+
+| Variable | | |
+|---|---|---|
+| `DTAPI_BIN` | required unless on the PATH | the `darktable-api` binary |
+| `DTAPI_CONFIGDIR` | required | the darktable config dir to use: the copy's `config` folder |
+| `DTAPI_CACHEDIR` | default: next to it, `cache` | the engine's darktable cache |
+| `DTAPI_GUI_BIN` | default: `darktable` next to `DTAPI_BIN` | the only darktable `takeover_library` may quit |
+
+### Claude Code
+
+    claude mcp add darktable-api \
+      -e DTAPI_BIN=/path/to/darktable/build/bin/darktable-api \
+      -e DTAPI_CONFIGDIR=/path/to/darktable-api-mcp/library-copy/config \
+      -- /path/to/darktable-api-mcp/.venv/bin/darktable-api-mcp
+
+### Claude Desktop (or another MCP client)
+
+```json
+{
+  "mcpServers": {
+    "darktable-api": {
+      "command": "/path/to/darktable-api-mcp/.venv/bin/darktable-api-mcp",
+      "env": {
+        "DTAPI_BIN": "/path/to/darktable/build/bin/darktable-api",
+        "DTAPI_CONFIGDIR": "/path/to/darktable-api-mcp/library-copy/config"
+      }
+    }
+  }
+}
+```
+
+## One engine per library
+
+The engine holds the library's lock, as darktable does. Two programs can't
+use one library copy at the same time: not darktable's GUI (use
+`release_library` / `acquire_library`), and not another darktable-api user
+such as [darktable-api-web](https://github.com/mmcc-xx/darktable-api-web).
+Give each its own copy.
+
+Tested on macOS. On Linux, `takeover_library` uses darktable's D-Bus `Quit`
+method (untested).
+
+## License
+
+GPL-3.0, like darktable.

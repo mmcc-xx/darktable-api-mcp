@@ -1,0 +1,18 @@
+[project]
+name = "darktable-api-mcp"
+version = "0.1.0"
+description = "MCP server that browses a darktable library and edits photos through darktable-api, a headless darktable"
+readme = "README.md"
+license = { text = "GPL-3.0-or-later" }
+requires-python = ">=3.10"
+dependencies = ["mcp>=1.10,<2"]  # 2.x renamed FastMCP
+
+[project.scripts]
+darktable-api-mcp = "darktable_api_mcp.server:main"
+
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["darktable_api_mcp"]
