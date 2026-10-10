@@ -43,7 +43,7 @@ owner.
 | `add_mask`, `list_masks`, `remove_mask` | drawn shapes (circle, ellipse, gradient, path, brush stroke) on a module, placed on the photo as shown; `set_blending(raster_source=...)` reuses another module's mask |
 | `measure_photo` | values at points and in boxes, histograms and clipping of the rendered photo |
 | `ai_denoise`, `job_status`, `list_jobs`, `cancel_job` | darktable's AI raw denoise as a background job: a new DNG photo beside the original, in its group (needs darktable built with AI) |
-| `find_dust_spots`, `heal_dust_spots` | sensor dust: a map of dust recurring across the photo's film roll (read from the raw files, cached), rated in this photo; heal circles in retouch as one history step, checked at 100% before and after. Needs `pip install 'darktable-api-mcp[dust]'` |
+| `find_dust_spots`, `heal_dust_spots` | sensor dust: a map of dust recurring across the photo's film roll (read from the raw files, cached), rated in this photo (raw files that are missing or unreadable are skipped and listed; with too few left the result says the map can't find dust); heal circles in retouch as one history step, checked at 100% before and after. Needs `pip install 'darktable-api-mcp[dust]'` |
 | `retouch_spots`, `list_retouch_spots`, `edit_retouch_spot`, `remove_retouch_spots` | retouch circles that clone, heal, blur or fill, placed on the photo as shown; move, resize, change or delete them |
 | `list_styles`, `create_style`, `apply_style`, `delete_style` | darktable's styles: make one from a photo's edit, apply one to photos (e.g. one B&W look on a set), as the lighttable does |
 | `paste_edit` | one photo's edit, or some of its modules, onto other photos (append or overwrite), as darktable's copy and paste |
@@ -64,15 +64,22 @@ starts in about 3 s on the first call.
 1. **darktable-api**, from the `darktable-api` branch of the darktable fork:
    https://github.com/mmcc-xx/darktable/tree/darktable-api
    (see `src/api/README.md` there). Build darktable with the MCP server
-   enabled, which builds `darktable-api` alongside:
+   (on by default on this branch), which builds `darktable-api` alongside,
+   and with AI for the AI mask and AI denoise tools:
 
        git clone -b darktable-api --recurse-submodules https://github.com/mmcc-xx/darktable.git
        cd darktable
-       cmake -B build -G Ninja -DUSE_MCP=ON
+       cmake -B build -G Ninja -DUSE_MCP=ON -DUSE_AI=ON
        cmake --build build --target darktable-api darktable
 
    darktable's README lists the build dependencies (on macOS:
-   `brew bundle --file=.ci/Brewfile`).
+   `brew bundle --file=.ci/Brewfile`; on Ubuntu 24.04 also `libpotrace-dev`
+   and `libarchive-dev`). The AI build downloads ONNX Runtime itself; on
+   Linux, darktable run from the build folder can't find it (it loads it by
+   file name): `cmake --install build`, or set `plugins/ai/ort_library_path`
+   in the library copy's darktablerc to
+   `build/_deps/onnxruntime/lib/libonnxruntime.so.<version>`. The AI models
+   are downloaded from darktable's preferences (AI tab).
 2. Python 3.10 or later.
 
 ## Install
@@ -152,7 +159,9 @@ the user's changes in darktable reach the AI. When darktable quits, the
 server goes back to the engine. (`release_library` / `acquire_library` are for
 a darktable started without `--api-socket`.)
 
-Tested on macOS. On Linux, `takeover_library` uses darktable's D-Bus `Quit`
+Tested on macOS (Apple M1) and Linux (Ubuntu 24.04): the engine's test
+suite, headless and with darktable's window, and Claude Code sessions with
+the skills. On Linux, `takeover_library` uses darktable's D-Bus `Quit`
 method (untested).
 
 ## License
