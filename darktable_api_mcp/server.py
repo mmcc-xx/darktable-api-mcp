@@ -24,7 +24,9 @@ Edits photos in a darktable library through darktable-api (a headless
 darktable). Typical flow: list_images -> open_photo(id) -> get_module /
 set_module (several times, checking render_preview) -> save. Edits stay in
 memory until save; discard_changes reopens the saved state; start_over
-applies darktable's defaults again.
+applies darktable's defaults again. When the user names a photo by number
+("photo 36"), that is its library id: open_photo(36) or image_info(36)
+directly. list_images hides rejected photos unless rating="all".
 
 darktable is scene-referred: set exposure first (midtones of the subject),
 white balance in color calibration (channelmixerrgb), then the tone mapper
@@ -148,7 +150,8 @@ async def list_images(film_roll_id: int | None = None, rating: str = "visible",
     size and history_end (0 = unedited).
 
     film_roll_id: from list_film_rolls; omit for all.
-    rating: "visible" (not rejected, default), "all", "rejected", or "1".."5"
+    rating: "visible" (not rejected, default; rejected photos are left
+            out), "all", "rejected", or "1".."5"
             (at least that many stars).
     label: "red", "yellow", "green", "blue" or "purple" to filter by label.
     offset, limit: paging (limit up to 1000); "total" is the full count."""

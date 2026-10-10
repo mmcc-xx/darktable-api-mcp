@@ -14,8 +14,11 @@ translation of it into tool calls and checks.
 
 1. **Find the photo.** If the user says "this photo" or "the one I have
    open", call `library_status`; if `darkroom_imgid` is set, use
-   `open_darkroom_photo`. Otherwise `list_images` / `get_collection`, then
-   `open_photo(id)`.
+   `open_darkroom_photo`. A number ("photo 36", "id 36") is the library
+   id: `open_photo(36)` directly. A file name: search `list_images`
+   (`rating="all"`: by default it hides rejected photos) or
+   `get_collection` (what darktable's lighttable shows). Ask only if
+   these don't settle it.
 2. **Know where you are running.**
    - *darktable's window serves the library* (the photo is in its darkroom):
      pickers and auto buttons work (`list_pickers`, `use_picker`), and
@@ -166,13 +169,30 @@ contrast. Use it for sky vs. foreground, backlit faces, deep shadows.
 - Headless, after changing a setting, check settings that darktable's
   window would have adjusted (exposure `mode`, AgX pivot with `auto_gamma`).
 
+## Skipping a step
+
+Not every photo needs all five steps. When you leave one out (white
+balance already right, no zones to dodge or burn), say so in one line with
+the reason, from what you saw or measured.
+
+## Before saving: dust and defects
+
+Look for sensor dust: dark soft blobs in sky, water, walls and other plain
+areas. `render_preview(zoom=0.5)` over the sky's corners and edges shows
+them; at the whole-photo size they're easy to miss. Heal what you find with
+`retouch_spots` (`tool: "heal"`, source a nearby clean patch of the same
+tone) or, for dust that recurs across a film roll, `find_dust_spots` /
+`heal_dust_spots`, and check the result zoomed in.
+
 ## Finishing
 
 - `save` only when the user is happy, or when they asked for a finished
   edit. Unsaved edits are visible in the web app and darktable's window
   but not in exports.
 - Summarise the edit in plain words: what you changed and why, with the
-  values, so the user can undo any of it.
+  values, so the user can undo any of it. Describe effects from what you
+  measured (darker, lighter, from L 59 to 56), and check the words match
+  the numbers.
 - Export only when asked (`export_photo`; web: JPEG, sRGB, 2048 px,
   quality 90–95).
 

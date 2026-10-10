@@ -11,8 +11,10 @@ the darktable manual's monochrome guide
 (https://docs.darktable.org/usermanual/development/en/guides-tutorials/monochrome/),
 and the presets in darktable's color calibration source. Our own wording.
 
-For finding the photo, exposure, checking and saving, follow the
-darktable-edit skill; this one covers what changes for black and white.
+For exposure, checking and saving, follow the darktable-edit skill; this
+one covers what changes for black and white. A photo named by number
+("photo 6") is its library id: `open_photo(6)` directly (`list_images`
+hides rejected photos by default).
 
 ## The idea
 
@@ -130,13 +132,25 @@ over the 24 ColorChecker patches under D50 (`filters.py` beside this
 file). Deep red (Wratten 29) is left out: a three-input mix can't
 reproduce it. Check the result with `measure_photo` as always.
 
-## Tones after the conversion
+## Tones after the conversion (always do this)
 
-Black and white lives on contrast and local light.
+Black and white lives on contrast and local light. A fresh conversion of a
+color edit almost always looks flat, because the color contrast that
+separated things is gone. Don't stop at the conversion:
 
-- **Global contrast**: AgX `curve_contrast_around_pivot`, toe and
-  shoulder power (see darktable-edit step 3). Mono usually wants a bit
-  more contrast than color.
+1. `measure_photo` (the histogram and a few boxes): does the photo use the
+   range from deep shadows to bright highlights? Is the subject clearly
+   lighter or darker than its surroundings?
+2. Raise global contrast until it does, in the tone mapper in use: AgX
+   `curve_contrast_around_pivot` (and toe / shoulder power), or filmic rgb
+   `contrast`. Small steps; check that highlights don't clip and shadows
+   keep some detail.
+3. Then dodge and burn where the subject needs it (below).
+
+If the user asked for a soft or low-contrast look, keep it soft and say so.
+
+- **Global contrast**: see step 2. Mono usually wants a bit more
+  contrast than color.
 - **Dodge and burn**: tone equalizer (presets "compress
   shadows/highlights | ..." for flat light or high dynamic range), or an
   exposure instance with a drawn mask (`add_module_instance("exposure")`,
@@ -167,6 +181,13 @@ mapper (color equalizer, color balance rgb) now shape which hues become
 light or dark.
 
 ## Finishing
+
+Before saving, check the sky and plain areas for sensor dust at
+`render_preview(zoom=0.5)` (darktable-edit, "Before saving"): in black and
+white, dust spots stand out more.
+
+Describe what changed from your measurements (e.g. "sky from L 53 to 50,
+darker"), and make the words match the numbers.
 
 Before saving, show the user the B&W next to the color original
 (`render_preview(history_step=<step before the conversion>)`) and say
