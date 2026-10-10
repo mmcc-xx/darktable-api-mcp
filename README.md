@@ -124,8 +124,9 @@ photos are only read.
 whole tasks: `darktable-edit` (darktable's standard scene-referred
 workflow), `darktable-mono` (black and white, with film filter mixes) and
 `darktable-cleanup` (dust, retouching, noise, sharpening, fringes),
-`darktable-local` (masks and local edits) and `darktable-batch` (one look
-across several photos).
+`darktable-local` (masks and local edits), `darktable-batch` (one look
+across several photos) and `darktable-review` (critique and suggestions
+without changing anything).
 For Claude Code, link them into `~/.claude/skills/` (all projects) or a
 project's `.claude/skills/`:
 
