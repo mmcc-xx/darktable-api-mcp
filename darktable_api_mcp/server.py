@@ -1253,6 +1253,11 @@ async def find_dust_spots(image_id: int | None = None, rebuild_map: bool = False
                      "dust_positions": len(m["dust"]), "recurrence_threshold_frames": m["threshold_frames"],
                      "unreadable_frames": [s["file"] for s in m["skipped"]]},
     }
+    if m["frames"] < m["threshold_frames"]:
+        summary["dust_map"]["note"] = (
+            f"only {m['frames']} readable raw files in the roll; dust must recur in at least "
+            f"{m['threshold_frames']:g} to be mapped, so this map can't find any. Check this photo "
+            "by eye (render_preview zoom=1 on the sky) instead.")
     return [json.dumps(summary), McpImage(data=dust.crop_sheet(a["lum"], a["spots"]), format="png")]
 
 

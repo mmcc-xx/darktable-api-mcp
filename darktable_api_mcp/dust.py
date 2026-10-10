@@ -107,7 +107,10 @@ def measure(lum: np.ndarray, x: float, y: float, r: float, search: float = 10, m
 # ── roll-wide dust map ────────────────────────────────────────────────────────
 
 def _file_key(path: Path) -> str:
-    st = path.stat()
+    try:
+        st = path.stat()
+    except OSError:     # missing or offline: build_map skips it as unreadable
+        return f"{path.name}:missing"
     return f"{path.name}:{st.st_size}:{int(st.st_mtime)}"
 
 
@@ -128,6 +131,9 @@ def build_map(frames: list[tuple[int, Path]], camera: str, roll_key: str,
             return m
     cands, geom, used, skipped = [], None, 0, []
     for imgid, path in frames:
+        if not Path(path).is_file():
+            skipped.append({"image_id": imgid, "file": Path(path).name, "error": "file not found"})
+            continue
         try:
             lum, g = render_sensor(path)
         except Exception as exc:
