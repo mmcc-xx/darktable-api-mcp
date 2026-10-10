@@ -59,7 +59,10 @@ roll, rates it in this photo), heal_dust_spots (heal circles in retouch, one
 history step, checked at 100% before/after). Other retouching:
 retouch_spots (clone, heal, blur, fill circles), list_retouch_spots,
 edit_retouch_spot, remove_retouch_spots.
-Library: get_photo_metadata, list_tags, set_tags, set_metadata (title,
+Library: get_collection (the photos the user's darktable shows),
+open_in_darkroom (switch darktable's darkroom to a photo), image_info (with
+camera data), check_sensor_clipping (from the raw: real sensor clipping vs
+highlights only bright in the render), get_photo_metadata, list_tags, set_tags, set_metadata (title,
 description, ...), set_location.
 Styles and copy/paste: list_styles, create_style, apply_style (e.g. one B&W
 look on a set of photos), delete_style, paste_edit (one photo's edit, or some
@@ -151,7 +154,9 @@ async def list_images(film_roll_id: int | None = None, rating: str = "visible",
 
 @mcp.tool()
 async def image_info(image_id: int) -> dict:
-    """One photo's library entry (as in list_images)."""
+    """One photo's library entry (as in list_images), and its camera data
+    (exif: maker, model, lens, aperture, exposure_time in seconds,
+    exposure_bias, iso, focal_length, taken, raw, monochrome)."""
     return await _call("image_info", imgid=image_id)
 
 
@@ -282,6 +287,36 @@ async def open_photo(image_id: int, discard_unsaved: bool = False) -> dict:
             "shared": opened.get("joined"),
             "modules": [m for m in mods["modules"] if m["in_history"] or m["enabled"]],
             "history_end": hist["history_end"], "history_items": len(hist["items"])}
+
+
+@mcp.tool()
+async def get_collection(offset: int = 0, limit: int = 100) -> dict:
+    """darktable's current collection: the photos the user's lighttable and
+    filmstrip show, in their order (as list_images entries), the
+    collection's rules, and which photos are selected."""
+    await _require("collection")
+    return await _call("collection", offset=offset, limit=limit)
+
+
+@mcp.tool()
+async def open_in_darkroom(image_id: int) -> dict:
+    """Show a photo in darktable's darkroom (darktable's window must be
+    serving the library), as clicking it in the filmstrip, or
+    double-clicking it in the lighttable, does; then make it the current
+    photo here. The darkroom saves the photo it leaves."""
+    await _require("darkroom_open")
+    await _call("darkroom_open", imgid=image_id)
+    try:
+        for _ in range(60):
+            st = await engine.library("library_status")
+            if st.get("darkroom_imgid") == image_id:
+                break
+            await asyncio.sleep(0.5)
+        else:
+            raise ToolError("darktable didn't switch to the photo within 30 s")
+    except EngineError as exc:
+        raise _err(exc)
+    return await open_photo(image_id)
 
 
 @mcp.tool()
@@ -1322,6 +1357,68 @@ async def heal_dust_spots(image_id: int | None = None, spots: list[int] | None =
         if ok:
             out.append(McpImage(data=png.tobytes(), format="png"))
     return out
+
+
+@mcp.tool()
+async def check_sensor_clipping(image_id: int | None = None) -> dict:
+    """Whether the sensor really clipped: counts photosites at the camera's
+    white level in the raw file, per color. A render's histogram can't tell
+    that (white balance, exposure and the tone mapper move it): highlights
+    clipped on the sensor are gone and can only be reconstructed
+    (highlights module), while highlights merely bright in the render are
+    recoverable with the tone mapper, exposure or tone equalizer. Also gives
+    each color's headroom: how far its brightest 0.1% sits below clipping,
+    in EV. Needs pip install 'darktable-api-mcp[dust]' (rawpy)."""
+    import math
+    try:
+        import numpy as np
+        import rawpy
+    except ImportError:
+        raise ToolError("needs rawpy: pip install 'darktable-api-mcp[dust]'")
+    if image_id is None:
+        image_id = engine.image_id
+    if image_id is None:
+        raise ToolError("give image_id, or open a photo first")
+    info = (await _call("image_info", imgid=image_id))["image"]
+    path = str(Path(info["folder"]) / info["filename"])
+
+    def measure() -> dict:
+        with rawpy.imread(path) as raw:
+            data = raw.raw_image_visible
+            colors = raw.raw_colors_visible
+            desc = raw.color_desc.decode()
+            white = raw.camera_white_level_per_channel or [raw.white_level] * 4
+            black = raw.black_level_per_channel or [0] * 4
+            out: dict[str, dict] = {}
+            for idx in range(len(desc)):
+                name = desc[idx].lower()
+                if name not in ("r", "g", "b"):
+                    continue
+                sites = data[colors == idx]
+                c = out.setdefault(name, {"clipped": 0, "total": 0, "top": []})
+                c["clipped"] += int(np.count_nonzero(sites >= white[idx] * 0.99))
+                c["total"] += int(sites.size)
+                c["top"].append((float(np.percentile(sites, 99.9)) - black[idx])
+                                / max(1, white[idx] - black[idx]))
+        res = {}
+        for ch, c in out.items():
+            top = max(c["top"])
+            res[ch] = {"clipped_pct": round(100 * c["clipped"] / c["total"], 4) if c["total"] else 0.0,
+                       "headroom_ev": round(-math.log2(top), 2) if top > 0 else None}
+        return res
+
+    try:
+        channels = await asyncio.to_thread(measure)
+    except Exception as exc:
+        raise ToolError(f"couldn't read {path} as a raw file: {exc}")
+    worst = max(v["clipped_pct"] for v in channels.values())
+    clipped = [ch for ch, v in channels.items() if v["clipped_pct"] >= 0.01]
+    return {"image_id": image_id, "file": path, "channels": channels, "sensor_clipped": bool(clipped),
+            "verdict": (f"sensor saturated in {', '.join(clipped)} ({worst:.2f}% of photosites at worst): that "
+                        "detail wasn't recorded; highlight reconstruction can only fill it in"
+                        if clipped else
+                        "no significant sensor saturation: bright areas in the render are recoverable with "
+                        "the tone mapper, exposure or tone equalizer")}
 
 
 # ── background jobs ──────────────────────────────────────────────────────────

@@ -19,11 +19,13 @@ owner.
 
 | Tool | Does |
 |---|---|
-| `list_film_rolls`, `list_images`, `image_info` | browse: film rolls; photos filtered by film roll, rating, color label, with paging |
+| `list_film_rolls`, `list_images`, `image_info` | browse: film rolls; photos filtered by film roll, rating, color label, with paging; a photo's camera data |
 | `get_thumbnail` | darktable's thumbnail of a photo (image) |
 | `get_photo_metadata`, `list_tags`, `set_tags`, `set_metadata`, `set_location` | tags, metadata (title, description, creator, ...) and location, as darktable's tagging, metadata editor and geotagging |
 | `set_rating`, `set_color_label` | rate (0–5), reject, color labels, as darktable's lighttable |
 | `open_photo` | open a photo for editing (joins an edit already open in another app, unsaved changes included) |
+| `open_in_darkroom`, `get_collection` | switch darktable's darkroom to a photo; the photos darktable's lighttable shows, and the selection |
+| `check_sensor_clipping` | real sensor clipping, from the raw file, per color, with each color's headroom (needs the `[dust]` extra) |
 | `open_darkroom_photo` | open the photo the user has open in darktable's darkroom (when darktable's window serves the library) |
 | `list_modules`, `get_module` | the photo's modules; a module's settings with values, defaults, ranges and dropdown values |
 | `set_module`, `enable_module` | change settings by name (checked, all or nothing), lists whole or by element (`grey[1]`), module on/off |
