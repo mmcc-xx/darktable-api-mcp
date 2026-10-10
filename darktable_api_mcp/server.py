@@ -826,7 +826,9 @@ async def add_mask(operation: str, shape: str, x: float | None = None, y: float 
         horizontal line: the module acts on one side, fading across it);
         compression 0-1 (how wide the fade is).
       shape "path": a closed outline through points [[x, y], ...] (3 or
-        more), smoothed as darktable's path tool draws it; feather.
+        more), smoothed as darktable's path tool draws it (corners round
+        off: add points close to a corner to keep it); feather. Points
+        outside the photo snap to its edge.
       shape "brush": a stroke along points (2 or more), width (half the
         stroke's thickness), hardness and density 0-1.
     combine: how it joins the module's earlier shapes (union, intersection,
@@ -837,6 +839,8 @@ async def add_mask(operation: str, shape: str, x: float | None = None, y: float 
         brush = shape == "brush"
         if not points or len(points) < (2 if brush else 3):
             raise ToolError("path: 3 or more points; brush: 2 or more")
+        # points just outside the photo (to reach its edge) snap onto it
+        points = [[min(max(p[0], 0.0), 1.0), min(max(p[1], 0.0), 1.0)] for p in points]
         raw, _, _ = await _photo_to_raw(points)
         _, size = await _photo_circle_to_raw(points[0][0], points[0][1], width if brush else feather)
         sh: dict[str, Any] = {"type": shape, "points": raw}
