@@ -122,7 +122,8 @@ photos are only read.
 
 `skills/` holds Agent Skills that teach Claude how to use the tools for
 whole tasks: `darktable-edit` (darktable's standard scene-referred
-workflow) and `darktable-mono` (black and white, with film filter mixes).
+workflow), `darktable-mono` (black and white, with film filter mixes) and
+`darktable-cleanup` (dust, retouching, noise, sharpening, fringes).
 For Claude Code, link them into `~/.claude/skills/` (all projects) or a
 project's `.claude/skills/`:
 
