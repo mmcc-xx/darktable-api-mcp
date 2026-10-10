@@ -34,8 +34,8 @@ module's setting names, ranges and dropdown values before set_module.
 Orientation, straightening and cropping: get_geometry, rotate_photo,
 crop_photo (render_preview(uncropped=True) shows the whole photo to choose a
 crop on). export_photo writes a finished file with darktable's export.
-Presets: list_presets / apply_preset (e.g. color calibration's "monochrome |
-luminance-based" for black and white, denoise (profiled) presets).
+Presets: list_presets / apply_preset (e.g. denoise (profiled) presets; for
+black and white see below).
 render_preview(zoom=1) shows a region at 100% to judge noise, sharpness and
 dust.
 Local edits: get_blending / set_blending (blend mode, opacity, parametric
@@ -45,8 +45,11 @@ object mask: click points on a subject, it is outlined). measure_photo reads val
 histogram and clipping of the rendered photo.
 Instances: add_module_instance (e.g. a second color calibration for creative
 B&W, a second denoise pass), rename_module_instance, remove_module_instance.
-Creative B&W: add_module_instance("channelmixerrgb", copy=True), then
-move_module(it, after the tone mapper, e.g. "agx"), set its gray mix. Curves:
+Black and white: add_module_instance("channelmixerrgb") (a new instance,
+not a copy) and apply_preset a "monochrome | ..." preset to it; keep the
+first instance, which does the white balance (the monochrome presets switch
+white balance off). Creative B&W: then move_module(it, after the tone
+mapper, e.g. "agx"). Curves:
 get_curve / set_curve (rgbcurve, tonecurve, colorzones, basecurve).
 duplicate_photo makes a version (e.g. a B&W one beside the color one).
 Before/after: render_preview(history_step=0) shows the original without
@@ -380,7 +383,8 @@ async def list_presets(operation: str, instance: int = 0) -> dict:
     """A module's presets, as its presets menu lists them: name (pass it to
     apply_preset), label (as darktable shows it, also accepted), builtin,
     autoapply. E.g. channelmixerrgb (color calibration) has "monochrome |
-    luminance-based" and film-emulation B&W mixes; denoiseprofile has
+    luminance-based" and film-emulation B&W mixes (apply them to a new
+    instance: they switch its white balance off); denoiseprofile has
     "wavelets: chroma only"."""
     await _require("preset_list")
     return await _edit(None, "preset_list", operation=operation, instance=instance)

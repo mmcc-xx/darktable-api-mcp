@@ -118,6 +118,16 @@ photos are only read.
 }
 ```
 
+### Skills
+
+`skills/` holds Agent Skills that teach Claude how to use the tools for
+whole tasks: `darktable-edit` (darktable's standard scene-referred
+workflow) and `darktable-mono` (black and white, with film filter mixes).
+For Claude Code, link them into `~/.claude/skills/` (all projects) or a
+project's `.claude/skills/`:
+
+    ln -s /path/to/darktable-api-mcp/skills/darktable-edit ~/.claude/skills/
+
 ## Sharing the engine with a web app
 
 The server doesn't run darktable itself: it connects to a darktable-api
