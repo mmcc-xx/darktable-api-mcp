@@ -183,6 +183,8 @@ them; at the whole-photo size they're easy to miss. Heal what you find with
 `retouch_spots` (`tool: "heal"`, source a nearby clean patch of the same
 tone) or, for dust that recurs across a film roll, `find_dust_spots` /
 `heal_dust_spots`, and check the result zoomed in.
+`find_dust_spots(this_photo=True)` also looks for dust in this photo
+alone (see darktable-cleanup).
 
 ## Finishing
 
@@ -206,3 +208,8 @@ tone) or, for dust that recurs across a film roll, `find_dust_spots` /
   more control than the vignette module.
 - Black and white: see the darktable-mono skill. Dust and retouching: see
   darktable-cleanup.
+- Work through the MCP tools. Don't write image-analysis scripts or
+  install packages (Python venvs, pip) to measure or find things in a
+  photo: `measure_photo`, `render_preview(zoom=…)`, `find_dust_spots` and
+  `check_sensor_clipping` cover it. When they can't answer, show the user
+  the zoomed render and ask.

@@ -182,9 +182,11 @@ light or dark.
 
 ## Finishing
 
-Before saving, check the sky and plain areas for sensor dust at
-`render_preview(zoom=0.5)` (darktable-edit, "Before saving"): in black and
-white, dust spots stand out more.
+Before saving, check the sky and plain areas for sensor dust (darktable-
+cleanup, "Sensor dust"): in black and white, dust spots stand out more,
+and a red or orange filter darkens a blue sky and shows faint dust.
+`heal_dust_spots(include_visible=True)`, then
+`find_dust_spots(this_photo=True)` for spots only this edit shows.
 
 Describe what changed from your measurements (e.g. "sky from L 53 to 50,
 darker"), and make the words match the numbers.

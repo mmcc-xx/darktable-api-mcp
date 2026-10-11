@@ -375,6 +375,109 @@ def _large_in_frame(lum: np.ndarray, d: dict) -> dict:
             "background": "smooth" if m["texture"] < 0.012 else "moderate" if m["texture"] < 0.02 else "textured"}
 
 
+# ── one photo on its own ──────────────────────────────────────────────────────
+
+def detect_in_render(lum: np.ndarray, k: float = 3.0, min_depth: float = 0.004, max_tex: float = 0.02,
+                     scales=(2, 3, 4.5, 6.5), max_spots: int = 8) -> list[dict]:
+    """Soft dark blobs in one photo as darktable renders it (the current edit,
+    about half the sensor's size): dust the roll's map doesn't have, e.g. a
+    one-off particle, or one a strong black and white filter brought out.
+
+    One frame can't tell dust from scene content by recurrence, so this asks
+    more of each blob's shape: a blob-shaped filter (a blur minus a 3x wider
+    one) at several sizes, against that filter's spread over the photo's
+    smooth areas (robust, so the blobs themselves don't raise it); then each
+    hit measured as measure_large does: dust is even all round on a smooth
+    background, a feature on a mountain or a cloud's edge is lopsided or
+    sits in texture. Calibrated on Mt Rainier (20250824_0006) in black and
+    white with a red filter: three blobs 1.2-2.2 % dark, about 40 px across
+    at half size, against snow, ridges and branches at the sky's edge; and
+    against the 23 other photos of the demo library, where sand, rocks and
+    landscape (5-25 % dark) and noise or cloud gradients in noisy skies
+    (1-2 %, contrast 2-3) are what it finds instead. Those noisy skies can't
+    be told from faint dust in one frame: the best few are reported, and a
+    person (or Claude) judges the crop sheet before healing.
+      obvious  — darkening >= 1.5 %, contrast vs the ring >= 4, even >= 2.5,
+                 score >= 5
+      visible  — darkening 0.8-5 %, contrast >= 2, even >= 1.2
+    on fine texture < 0.6 % (else not reported); at most max_spots, the
+    strongest first. Render it at JPEG quality ~97: quality 85's 8 px blocks
+    look like faint blobs. Positions and radius in the render's pixels."""
+    q = LARGE_Q
+    small = cv2.resize(lum, (lum.shape[1] // q, lum.shape[0] // q), interpolation=cv2.INTER_AREA)
+    fine = np.abs(lum - cv2.GaussianBlur(lum, (0, 0), 1.5))
+    tex = cv2.resize(cv2.GaussianBlur(fine, (0, 0), 6), small.shape[::-1], interpolation=cv2.INTER_AREA)
+    h, w = small.shape
+    found = []
+    for s in scales:
+        outer = cv2.GaussianBlur(small, (0, 0), 3 * s)
+        resp = (cv2.GaussianBlur(small, (0, 0), s) - outer) / (outer + 1e-3)
+        win = int(8 * s) | 1
+        smooth = (cv2.blur(tex / (outer + 1e-3), (win, win)) < max_tex) & (outer > 0.12) & (outer < 0.95)
+        if smooth.sum() < 200:
+            continue
+        v = resp[smooth]
+        sigma = 1.4826 * float(np.median(np.abs(v - np.median(v)))) + 1e-5
+        cand = (resp < -k * sigma) & (resp < -min_depth) & smooth
+        n, labels, stats, cent = cv2.connectedComponentsWithStats(cand.astype(np.uint8), connectivity=8)
+        for i in range(1, n):
+            cx, cy = cent[i]
+            margin = 3 * s + 2                         # the wide blur is unreliable at the frame's edge
+            if cx < margin or cy < margin or cx > w - margin or cy > h - margin:
+                continue
+            found.append({"x": float(cx) * q, "y": float(cy) * q, "r": 1.6 * s * q,
+                          "snr": round(float(-resp[labels == i].min()) / sigma, 1)})
+    found.sort(key=lambda d: -d["snr"])                # one hit per place, across sizes
+    hits = []
+    for d in found:
+        if all(np.hypot(d["x"] - e["x"], d["y"] - e["y"]) > max(d["r"], e["r"]) for e in hits):
+            hits.append(d)
+    out = []
+    for d in hits:
+        # the radius where the blob is most even all round
+        best = None
+        for r in (0.7 * d["r"], d["r"], 1.4 * d["r"]):
+            m = measure_large(lum, d["x"], d["y"], r)
+            even = m["depth"] / max(m["lopsided"], 1e-4)
+            if best is None or even > best[1]:
+                best = (r, even, m)
+        r, even, m = best
+        ratio = m["depth"] / max(m["ring"], 1e-4)
+        # dust's shadow is faint: darker blobs are scene content (sand
+        # ripples, rocks, birds), found by the score on sandy and cloudy frames
+        if m["texture"] >= 0.006 or not 0.008 <= m["depth"] <= 0.05 or ratio < 2 or even < 1.2:
+            continue
+        status = ("obvious" if m["depth"] >= 0.015 and ratio >= 4 and even >= 2.5 and d["snr"] >= 5
+                  else "visible")
+        out.append({"x": d["x"], "y": d["y"], "r": round(r, 1), "depth": m["depth"], "ratio": round(ratio, 1),
+                    "texture": m["texture"], "even": round(even, 1), "snr": d["snr"], "status": status,
+                    "visible": True, "size": "large" if r >= 12 else "small",
+                    "background": "smooth" if m["texture"] < 0.003 else "moderate"})
+    return out[:max_spots]
+
+
+def blob_extent(lum: np.ndarray, x: float, y: float, r: float) -> float:
+    """How far a soft blob's shadow reaches: the radius where its darkening
+    (against a background blurred at 3x r) falls to 15 % of the centre's.
+    detect_in_render measures a blob at its most even radius, well inside
+    that soft edge; a heal circle must cover all of it."""
+    half = int(6 * r) + 4
+    x0, y0 = max(0, int(x) - half), max(0, int(y) - half)
+    win = lum[y0:int(y) + half, x0:int(x) + half].astype(np.float32)
+    bg = cv2.GaussianBlur(win, (0, 0), 3 * r)
+    rel = cv2.GaussianBlur((win - bg) / (bg + 1e-3), (0, 0), max(1.0, r / 4))
+    yy, xx = np.mgrid[:win.shape[0], :win.shape[1]]
+    d = np.hypot(xx - (x - x0), yy - (y - y0))
+    centre = float(rel[d < 2].mean()) if (d < 2).any() else 0.0
+    if centre >= 0:
+        return 2 * r
+    for a in range(2, int(4 * r), 2):
+        ring = (d >= a) & (d < a + 2)
+        if ring.any() and float(rel[ring].mean()) > 0.15 * centre:
+            return float(a)
+    return 4 * r
+
+
 def crop_sheet(lum: np.ndarray, spots: list[dict], tile: int = 180, half_window: int = 40) -> bytes:
     """PNG of numbered, contrast-stretched crops around each spot (sensor orientation)."""
     tiles = []
@@ -407,10 +510,13 @@ def heal_radius(r_dust: float, size: str = "small") -> float:
     return max(6.0, (1.5 if size == "large" else 2.0) * r_dust)
 
 
-def choose_source(lum: np.ndarray, x: float, y: float, R: float, avoid: list[tuple[float, float, float]]) -> dict | None:
+def choose_source(lum: np.ndarray, x: float, y: float, R: float, avoid: list[tuple[float, float, float]],
+                  max_texture: float | None = None) -> dict | None:
     """Where to copy from: a nearby patch of radius R that is smooth and matches the
     brightness around the spot. avoid: other dust (x, y, r) to stay clear of.
-    Returns {"x", "y", "score"} in half-size pixels, or None."""
+    max_texture: refuse patches rougher than that (std/mean), e.g. branches
+    at the sky's edge that a close brightness match would otherwise win.
+    Returns {"x", "y", "score"} in the image's pixels, or None."""
     h, w = lum.shape
     yy, xx = np.mgrid[0:h, 0:w]
     def disk(cx, cy, rr):
@@ -433,6 +539,8 @@ def choose_source(lum: np.ndarray, x: float, y: float, R: float, avoid: list[tup
             if p.size < 10:
                 continue
             tex = float(np.std(p) / (np.mean(p) + 1e-3))
+            if max_texture is not None and tex > max_texture:
+                continue
             diff = abs(float(np.mean(p)) - target) / (target + 1e-3)
             score = tex + 2.0 * diff + 0.01 * dist
             if best is None or score < best["score"]:

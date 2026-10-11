@@ -271,7 +271,8 @@ class Engine:
             return r
 
     async def render(self, image_id: int, width: int, height: int,
-                     uncropped: bool = False, region: dict | None = None) -> tuple[bytes, dict] | None:
+                     uncropped: bool = False, region: dict | None = None,
+                     quality: int = 85) -> tuple[bytes, dict] | None:
         """JPEG bytes and timings, or None if a newer render request arrived
         while this one waited. uncropped leaves the crop module's box out
         (to draw a new one on); region ({zoom, center_x, center_y}) renders
@@ -284,7 +285,7 @@ class Engine:
             if seq != self._render_seq:
                 return None
             return await self._to_file(lambda **p: self._session_call(image_id, "render", **p),
-                                       width=width, height=height, quality=85, uncropped=uncropped,
+                                       width=width, height=height, quality=quality, uncropped=uncropped,
                                        **(region or {}))
 
     async def thumbnail(self, image_id: int, size: int) -> bytes:

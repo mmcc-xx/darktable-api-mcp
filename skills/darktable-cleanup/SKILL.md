@@ -47,8 +47,18 @@ blobs, most visible on smooth bright areas at small apertures.
 3. Check its before/after sheet and the "healed" per spot. A spot that
    didn't heal: `render_preview(zoom=1)` there, then fix it by hand (below).
 4. Dust it can't map (one-off specks, faint blobs that only show in this
-   photo, a roll with few frames): heal by hand with `retouch_spots` as
-   below.
+   photo, a roll with few frames): `find_dust_spots(this_photo=True)` also
+   looks in darktable's render of the current edit. Its spots are numbered
+   from 101 with their own crop sheet (the photo as rendered); one photo
+   can't prove a blob is dust, so look at the sheet and heal only the
+   round soft shadows: `heal_dust_spots(spots=[101, ...])` (sized to the
+   whole shadow, copied from a smooth patch). Anything else: heal by hand
+   with `retouch_spots` as below.
+
+**After black and white,** especially a red or orange filter (it darkens a
+blue sky and brings dust out): `heal_dust_spots(include_visible=True)`
+first (spots the map rated "visible" often show now), then
+`find_dust_spots(this_photo=True)` for the rest.
 
 Spots come in two sizes (`size`): "small" specks (~20–60 px) and "large"
 soft blobs (~50–300 px, dust further from the sensor). A large spot in a
@@ -57,6 +67,11 @@ crop sheet before healing.
 
 `find_dust_spots` finds the obvious dust, not every speck: after it, still
 look at the sky at `zoom=0.5`.
+
+Use the tools to find and repair dust; don't write your own detection
+scripts or install Python packages for it. If the tools miss a spot you
+can see, show the user the zoomed render, say where it is, and heal it
+with `retouch_spots`.
 
 ## 2. Blemishes and distractions (retouch)
 
