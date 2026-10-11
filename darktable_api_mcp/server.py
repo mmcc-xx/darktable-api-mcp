@@ -346,7 +346,8 @@ async def open_darkroom_photo() -> dict:
 @mcp.tool()
 async def list_modules() -> dict:
     """The open photo's modules in pipeline order: operation (e.g. exposure,
-    agx, colorbalancergb, channelmixerrgb, toneequal), instance, name, enabled,
+    agx, colorbalancergb, channelmixerrgb, toneequal), instance, name, label
+    (as darktable shows the module, e.g. "local contrast" for bilat), enabled,
     whether it is in the history."""
     return await _edit(None, "module_list")
 
@@ -521,8 +522,10 @@ async def compress_history(truncate: bool = False, confirm: bool = False) -> dic
 @mcp.tool()
 async def get_history() -> dict:
     """The open photo's history steps: num (0-based; darktable's history panel
-    shows num + 1), operation, instance, enabled, applied; and history_end, the
-    number of steps applied."""
+    shows num + 1), operation, instance, label (the step's name as darktable
+    shows it, e.g. "local contrast", "exposure • sky": use it when talking to
+    the user), enabled, applied; and history_end, the number of steps
+    applied."""
     return await _edit(None, "history_list")
 
 
