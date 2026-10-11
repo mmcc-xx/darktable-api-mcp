@@ -76,7 +76,11 @@ Library: get_collection (the photos the user's darktable shows),
 open_in_darkroom (switch darktable's darkroom to a photo), image_info (with
 camera data), check_sensor_clipping (from the raw: real sensor clipping vs
 highlights only bright in the render), get_photo_metadata, list_tags, set_tags, set_metadata (title,
-description, ...), set_location.
+description, ...), set_location. make_thumbnails renders thumbnails in bulk
+(a film roll, the whole library) into darktable's thumbnail cache.
+Tagging by content: list_tags (reuse the library's vocabulary), then
+photo_sheet pages (thumbnails with id, date, place, current tags), then
+tag_photos for each page.
 Styles and copy/paste: list_styles, create_style, apply_style (e.g. one B&W
 look on a set of photos), delete_style, paste_edit (one photo's edit, or some
 of its modules, onto others). These save the photos they change.
@@ -199,6 +203,32 @@ async def get_thumbnail(image_id: int, size: int = 512) -> Image:
 
 
 @mcp.tool()
+async def make_thumbnails(image_ids: list[int] | None = None, film_roll_id: int | None = None,
+                          whole_library: bool = False, size: int = 720, outdated_only: bool = True,
+                          wait: bool = True, timeout_s: int = 1800) -> dict:
+    """Make darktable thumbnails in bulk (as darktable-generate-cache does):
+    rendered with each photo's saved edit and written to darktable's disk
+    cache, so darktable's lighttable, the web app's grid, get_thumbnail and
+    photo_sheet show them at once. Give image_ids, a film_roll_id, or
+    whole_library=True. outdated_only (default) skips photos whose
+    thumbnails are on disk and match their edit. size: the largest
+    thumbnail needed (pixels).
+
+    A background job (about 0.2-1 s a photo): wait=True waits for it
+    (result: generated, skipped, failed); wait=False returns the job at
+    once (job_status, cancel_job)."""
+    await _require("thumbnails")
+    params: dict[str, Any] = {"size": max(64, min(size, 4096)), "outdated_only": outdated_only}
+    if image_ids:
+        params["imgids"] = image_ids
+    elif film_roll_id is not None:
+        params["film_id"] = film_roll_id
+    elif not whole_library:
+        raise ToolError("give image_ids, film_roll_id, or whole_library=True")
+    return await _run_job(lambda: _call("thumbnails", **params), wait, timeout_s)
+
+
+@mcp.tool()
 async def set_rating(image_id: int, rating: int | None = None, reject: bool = False) -> dict:
     """Set a photo's star rating (0-5), or reject it (reject=True), as
     darktable's lighttable does: rejecting keeps the stars, rating clears a
@@ -263,6 +293,109 @@ async def set_tags(attach: list[str] | None = None, detach: list[str] | None = N
     if detach:
         params["detach"] = detach
     return await _call("set_tags", **params)
+
+
+def _sheet_line(img: dict, info: dict, md: dict) -> str:
+    ex = info.get("exif") or {}
+    parts = [f"id {img['id']}", img.get("filename", "")]
+    if ex.get("taken"):
+        parts.append(str(ex["taken"]))
+    cam = " ".join(x for x in (ex.get("model"), ex.get("lens")) if x)
+    if cam:
+        parts.append(cam)
+    loc = md.get("location")
+    if loc:
+        parts.append(f"at {loc['latitude']:.4f}, {loc['longitude']:.4f}")
+    if md.get("metadata", {}).get("title"):
+        parts.append(f"title \"{md['metadata']['title']}\"")
+    parts.append("tags: " + (", ".join(md.get("tags") or []) or "none"))
+    return " · ".join(parts)
+
+
+@mcp.tool(structured_output=False)
+async def photo_sheet(image_ids: list[int] | None = None, film_roll_id: int | None = None,
+                      rating: str = "visible", untagged_only: bool = False, offset: int = 0,
+                      limit: int = 12, size: int = 384) -> list:
+    """Look at many photos at once, for tagging them by content (or culling,
+    finding a subject): each photo's thumbnail with a line giving its id,
+    filename, date, camera and lens, location, title and current tags. Give
+    image_ids, or page through a film roll (film_roll_id; omit for the whole
+    library) with offset/limit (up to 24 a page); the first line says where
+    the next page starts. untagged_only skips photos that already have tags
+    of their own (darktable's own "darktable|..." tags don't count).
+
+    Auto-tagging: list_tags first and reuse the library's existing tags and
+    hierarchy (e.g. "places|usa|washington", "animals|mammals|prairie dog");
+    make_thumbnails for the roll first makes the pages fast; then
+    tag_photos with what you see on each page."""
+    await _require("image_metadata")
+    limit = max(1, min(limit, 24))
+    size = max(128, min(size, 768))
+    imgs: list[dict] = []
+    next_offset = None
+    total = None
+    if image_ids:
+        for i in image_ids[offset:offset + limit]:
+            imgs.append((await _call("image_info", imgid=i))["image"])
+        total = len(image_ids)
+        next_offset = offset + limit if offset + limit < total else None
+    else:
+        pos = offset
+        while len(imgs) < limit:
+            page = await _call("images_list", offset=pos, limit=100, **_filters(film_roll_id, rating, None))
+            total = page["total"]
+            for img in page["images"]:
+                pos += 1
+                if untagged_only and (await _call("image_metadata", imgid=img["id"]))["tags"]:
+                    continue
+                imgs.append(img)
+                if len(imgs) == limit:
+                    break
+            if not page["images"] or pos >= total:
+                break
+        next_offset = pos if pos < (total or 0) else None
+    out: list = [f"{len(imgs)} photos (of {total}); "
+                 + (f"next page: offset={next_offset}" if next_offset is not None else "no more pages")]
+    for img in imgs:
+        info = await _call("image_info", imgid=img["id"])
+        md = await _call("image_metadata", imgid=img["id"])
+        out.append(_sheet_line(img, info, md))
+        try:
+            out.append(Image(data=await engine.thumbnail(img["id"], size), format="jpeg"))
+        except EngineError as exc:
+            out.append(f"(no thumbnail: {exc})")
+    return out
+
+
+@mcp.tool()
+async def tag_photos(tags: dict[str, list[str]], detach: dict[str, list[str]] | None = None) -> dict:
+    """Tag many photos, each with its own tags: {"<image id>": ["tag",
+    "places|usa|washington|mt rainier", ...]}; detach takes the same form
+    to remove tags. New tags are created ("|" for the hierarchy). Written to
+    the library and sidecars at once, as darktable's tagging module does."""
+    await _require("set_tags")
+    detach = detach or {}
+    done: dict[str, Any] = {}
+    failed: dict[str, str] = {}
+    for key in sorted(set(tags) | set(detach), key=lambda k: int(k) if str(k).isdigit() else 0):
+        try:
+            imgid = int(key)
+        except ValueError:
+            failed[key] = "not an image id"
+            continue
+        params: dict[str, Any] = {"imgids": [imgid]}
+        if tags.get(key):
+            params["attach"] = tags[key]
+        if detach.get(key):
+            params["detach"] = detach[key]
+        if len(params) == 1:
+            continue
+        try:
+            await engine.call("set_tags", **params)
+            done[key] = (await engine.call("image_metadata", imgid=imgid))["tags"]
+        except EngineError as exc:
+            failed[key] = str(exc)
+    return {"tagged": done, **({"failed": failed} if failed else {})}
 
 
 @mcp.tool()

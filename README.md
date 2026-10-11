@@ -21,7 +21,9 @@ owner.
 |---|---|
 | `list_film_rolls`, `list_images`, `image_info` | browse: film rolls; photos filtered by film roll, rating, color label, with paging; a photo's camera data |
 | `get_thumbnail` | darktable's thumbnail of a photo (image) |
+| `make_thumbnails` | thumbnails in bulk (photos, a film roll, the whole library) rendered into darktable's thumbnail cache, as a background job |
 | `get_photo_metadata`, `list_tags`, `set_tags`, `set_metadata`, `set_location` | tags, metadata (title, description, creator, ...) and location, as darktable's tagging, metadata editor and geotagging |
+| `photo_sheet`, `tag_photos` | tagging by content: pages of thumbnails with each photo's id, date, camera, place and tags for Claude to look at, then each photo's own tags applied in one call |
 | `set_rating`, `set_color_label` | rate (0–5), reject, color labels, as darktable's lighttable |
 | `open_photo` | open a photo for editing (joins an edit already open in another app, unsaved changes included) |
 | `open_in_darkroom`, `get_collection` | switch darktable's darkroom to a photo; the photos darktable's lighttable shows, and the selection |
