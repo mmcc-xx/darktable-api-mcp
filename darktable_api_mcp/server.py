@@ -1217,7 +1217,7 @@ def _dust_spot_json(s: dict, geom: dict) -> dict:
             "darkening_pct": round(100 * s["depth"], 1), "contrast_vs_background": s["ratio"],
             "background": s["background"], "diameter_px": int(round(4 * s["r"])),
             "on_photo": s.get("on_photo"), "raw_x": s["raw"]["raw_x"], "raw_y": s["raw"]["raw_y"],
-            "found_in_roll_frames": s["roll_frames"]}
+            "found_in_roll_frames": s["roll_frames"], "size": s.get("size", "small")}
 
 
 @mcp.tool(structured_output=False)
@@ -1226,9 +1226,11 @@ async def find_dust_spots(image_id: int | None = None, rebuild_map: bool = False
 
     Dust sits at the same sensor position in every frame, so this maps the
     soft dark round blobs that recur across the photo's film roll (cached; the
-    first call for a roll reads every raw file, ~0.4 s each), then measures
-    each mapped spot in this photo: dust shows against smooth, bright-ish
-    backgrounds (sky), more at small apertures.
+    first call for a roll reads every raw file, ~0.4 s each), small specks
+    and large soft blobs (~50-300 px), then measures each mapped spot in this
+    photo: dust shows against smooth, bright-ish backgrounds (sky), more at
+    small apertures. Blobs seen in only this photo aren't mapped (one photo
+    can't tell them from scene content): look at the sky yourself too.
 
     Returns a summary and a sheet of numbered crops (sensor orientation,
     contrast-stretched; green = visible here, red = hidden). Per spot: status
@@ -1238,8 +1240,10 @@ async def find_dust_spots(image_id: int | None = None, rebuild_map: bool = False
     contrast_vs_background, background, diameter_px (full size), on_photo
     (x, y as fractions of the photo as rendered; null if cropped out: use it
     for render_preview(zoom=1, center_x, center_y)), and in how many frames of
-    the roll it recurs. Finds the obvious dust, not every speck. Opens the
-    photo (joins its edit). heal_dust_spots repairs them."""
+    the roll it recurs, size ("small" or "large"; a large one in a cloudy
+    sky may be rated obvious where it hardly shows: check the sheet). Finds
+    the obvious dust, not every speck. Opens the photo (joins its edit).
+    heal_dust_spots repairs them."""
     from mcp.server.fastmcp import Image as McpImage
     a = await _dust_analysis(image_id, rebuild_map)
     dust = _dust_module()
@@ -1321,7 +1325,7 @@ async def heal_dust_spots(image_id: int | None = None, spots: list[int] | None =
         if s.get("on_photo") is None:
             skipped.append({"id": s["id"], "why": "outside the photo as cropped"})
             continue
-        R = dust.heal_radius(s["r"])
+        R = dust.heal_radius(s["r"], s.get("size", "small"))
         src = dust.choose_source(lum, s["x"], s["y"], R, [v for v in avoid if (v[0], v[1]) != (s["x"], s["y"])])
         if src is None:
             skipped.append({"id": s["id"], "why": "no clean source patch nearby"})

@@ -46,8 +46,14 @@ blobs, most visible on smooth bright areas at small apertures.
    `spots=[ids]` for a choice. `dry_run=True` shows the plan first.
 3. Check its before/after sheet and the "healed" per spot. A spot that
    didn't heal: `render_preview(zoom=1)` there, then fix it by hand (below).
-4. Dust it can't map (one-off specks, a roll with few frames): heal by hand
-   with `retouch_spots` as below.
+4. Dust it can't map (one-off specks, faint blobs that only show in this
+   photo, a roll with few frames): heal by hand with `retouch_spots` as
+   below.
+
+Spots come in two sizes (`size`): "small" specks (~20–60 px) and "large"
+soft blobs (~50–300 px, dust further from the sensor). A large spot in a
+cloudy sky can be rated "obvious" where it's hard to see: check it on the
+crop sheet before healing.
 
 `find_dust_spots` finds the obvious dust, not every speck: after it, still
 look at the sky at `zoom=0.5`.

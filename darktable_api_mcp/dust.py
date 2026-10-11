@@ -17,12 +17,19 @@ straight from the RAW (rawpy, half size, no flip, no lens correction):
 3. spots_in_frame(): for one photo, which mapped dust spots are visible
    there (measured signal-to-noise at that position).
 
+Large soft blobs (dust further from the sensor, ~50–300 px across at full
+size) get their own detector (detect_large, on a 1/4 size copy) and their
+own vote in build_map, by the same rule. One frame alone can't tell them
+from scene content (shadows, objects on a lawn), so they are only reported
+when they recur.
+
 Coordinates: "half" = pixels of the half-size sensor rendering;
 `raw_norm` = normalized to darktable's full raw buffer (what drawn masks and
 retouch shapes use: darktable-api's "raw" space). Where a spot is on the
 photo as shown, and which retouch circles exist, come from darktable-api
 (coords, retouch_list).
-Tuned on a Panasonic GX85; dust ~20–30 px across at full size.
+Tuned on a Panasonic GX85; dust ~20–30 px across at full size, and a
+~140 px blob in 79 of 132 frames of its 2025-08 roll.
 
 From darktableluamcp's dust.py (same author).
 """
@@ -36,7 +43,7 @@ import cv2
 import numpy as np
 
 CACHE = Path(os.environ.get("DTAPI_DUST_CACHE") or Path.home() / ".cache/darktable-api-mcp/dust")
-MAP_VERSION = 1
+MAP_VERSION = 2
 
 
 # ── rendering ─────────────────────────────────────────────────────────────────
@@ -89,6 +96,80 @@ def detect(lum: np.ndarray, k: float = 6.0, min_depth: float = 0.02, max_noise: 
     return out
 
 
+LARGE_Q = 4                     # large blobs are found on a 1/4 size copy of the half-size frame
+
+
+def detect_large(lum: np.ndarray, scales=(3, 5, 8, 12), k: float = 5.0, min_depth: float = 0.012,
+                 max_tex: float = 0.02) -> list[dict]:
+    """Large soft dark blobs (about 50–300 px across at full size) on a smooth
+    background: dust that sits further from the sensor, or a bigger particle.
+    detect() misses them: they are larger than its blobs and its background
+    blur absorbs them. One frame has many hits from scene content (shadows,
+    objects on a lawn), so only build_map's vote across a roll makes them dust.
+    Positions and radius in half-size pixels."""
+    q = LARGE_Q
+    small = cv2.resize(lum, (lum.shape[1] // q, lum.shape[0] // q), interpolation=cv2.INTER_AREA)
+    fine = np.abs(lum - cv2.GaussianBlur(lum, (0, 0), 1.5))       # texture, from the half-size frame
+    tex = cv2.resize(cv2.GaussianBlur(fine, (0, 0), 6), small.shape[::-1], interpolation=cv2.INTER_AREA)
+    h, w = small.shape
+    found = []
+    for s in scales:
+        bg = cv2.GaussianBlur(small, (0, 0), 4 * s)
+        rel = cv2.GaussianBlur((small - bg) / (bg + 1e-3), (0, 0), s / 2)
+        smooth = cv2.blur(tex / (bg + 1e-3), (6 * s + 1, 6 * s + 1))
+        noise = np.sqrt(cv2.blur(np.minimum(rel * rel, 0.01 ** 2), (8 * s + 1, 8 * s + 1)) + 1e-10)
+        cand = (rel < -k * noise) & (rel < -min_depth) & (bg > 0.12) & (bg < 0.95) & (smooth < max_tex)
+        n, labels, stats, cent = cv2.connectedComponentsWithStats(cand.astype(np.uint8), connectivity=8)
+        for i in range(1, n):
+            x, y, bw, bh, area = stats[i]
+            r = max(bw, bh) / 2
+            if r < 0.6 * s or r > 3 * s or max(bw, bh) > 1.8 * min(bw, bh) or area < 0.5 * bw * bh:
+                continue
+            cx, cy = cent[i]
+            margin = 2.5 * r + 2 * s                   # the background blur is unreliable at the frame's edge
+            if cx < margin or cy < margin or cx > w - margin or cy > h - margin:
+                continue
+            depth = float(-rel[y:y + bh, x:x + bw][labels[y:y + bh, x:x + bw] == i].min())
+            found.append({"x": float(cx) * q, "y": float(cy) * q, "r": r * q, "depth": round(depth, 4),
+                          "snr": round(depth / float(noise[int(cy), int(cx)]), 1)})
+    found.sort(key=lambda d: -d["snr"])            # one hit per place, across scales
+    out = []
+    for d in found:
+        if all(np.hypot(d["x"] - e["x"], d["y"] - e["y"]) > max(d["r"], e["r"]) for e in out):
+            out.append(d)
+    return out
+
+
+def measure_large(lum: np.ndarray, x: float, y: float, r: float) -> dict:
+    """A large mapped blob in this frame: darkening inside it, the background's
+    variation around it at the blob's scale, and the fine texture there."""
+    q = LARGE_Q
+    s = max(2.0, r / q / 2)
+    hw = int(10 * s) + 1
+    xs, ys = x / q, y / q
+    x0, y0 = max(0, int(xs) * q - hw * q), max(0, int(ys) * q - hw * q)
+    win = lum[y0:int(ys) * q + hw * q, x0:int(xs) * q + hw * q]
+    small = cv2.resize(win, (win.shape[1] // q, win.shape[0] // q), interpolation=cv2.INTER_AREA)
+    fine = np.abs(win - cv2.GaussianBlur(win, (0, 0), 1.5))
+    tex = cv2.resize(cv2.GaussianBlur(fine, (0, 0), 6), small.shape[::-1], interpolation=cv2.INTER_AREA)
+    bg = cv2.GaussianBlur(small, (0, 0), 4 * s)
+    rel = cv2.GaussianBlur((small - bg) / (bg + 1e-3), (0, 0), s / 2)
+    cx, cy, rs = (x - x0) / q, (y - y0) / q, r / q
+    yy, xx = np.mgrid[:rel.shape[0], :rel.shape[1]]
+    d2 = (xx - cx) ** 2 + (yy - cy) ** 2
+    inner, ring = d2 <= (0.5 * rs) ** 2, (d2 > (1.5 * rs) ** 2) & (d2 < (3 * rs) ** 2)
+    close = (d2 > (1.2 * rs) ** 2) & (d2 < (1.8 * rs) ** 2)
+    if not inner.any() or not ring.any() or not close.any():
+        return {"depth": 0.0, "ring": 1.0, "texture": 1.0, "lopsided": 1.0}
+    # a blob is even all round; a cloud's edge is darker on one side
+    ang = np.arctan2(yy - cy, xx - cx)[close]
+    sectors = [rel[close][(ang >= a) & (ang < a + np.pi / 4)] for a in np.arange(-np.pi, np.pi, np.pi / 4)]
+    sectors = [float(v.mean()) for v in sectors if v.size]
+    return {"depth": round(float(-rel[inner].mean()), 4), "ring": round(float(rel[ring].std()), 4),
+            "texture": round(float((tex / (bg + 1e-3))[d2 <= (3 * rs) ** 2].mean()), 4),
+            "lopsided": round(max(sectors) - min(sectors), 4)}
+
+
 def measure(lum: np.ndarray, x: float, y: float, r: float, search: float = 10, maps=None) -> dict:
     """Is there a dark blob near (x, y) in this frame? Depth and SNR at the darkest point."""
     bg, rel, noise = maps or _maps(lum)
@@ -129,7 +210,7 @@ def build_map(frames: list[tuple[int, Path]], camera: str, roll_key: str,
         m = json.loads(cache.read_text())
         if m.get("version") == MAP_VERSION and m.get("signature") == sig:
             return m
-    cands, geom, used, skipped = [], None, 0, []
+    cands, large, geom, used, skipped = [], [], None, 0, []
     for imgid, path in frames:
         if not Path(path).is_file():
             skipped.append({"image_id": imgid, "file": Path(path).name, "error": "file not found"})
@@ -146,9 +227,38 @@ def build_map(frames: list[tuple[int, Path]], camera: str, roll_key: str,
             continue
         used += 1
         cands += [dict(c, id=imgid) for c in detect(lum)]
+        large += [dict(c, id=imgid) for c in detect_large(lum)]
     if geom is None:
         raise ValueError("no readable RAW frames")
     H, W = geom["half_height"], geom["half_width"]
+
+    # small dust: votes at full half-size resolution
+    peaks = _vote(cands, H, W, 1, lambda c: 5, 6, 14)
+    background = _background(peaks)
+    threshold = max(min_frames, background_factor * background)
+    dust = [dict(p, size="small") for p in peaks if p["frames"] >= threshold]
+    # large soft blobs: votes on the 1/4 grid detect_large works on, same rule;
+    # leave out what the small dust already covers
+    lpeaks = _vote(large, H // LARGE_Q, W // LARGE_Q, LARGE_Q, lambda c: max(3, 0.5 * c["r"] / LARGE_Q), 8, 14)
+    lbackground = _background(lpeaks)
+    lthreshold = max(min_frames, background_factor * lbackground)
+    dust += [dict(p, size="large") for p in lpeaks if p["frames"] >= lthreshold
+             and all(np.hypot(p["x"] - d["x"], p["y"] - d["y"]) > p["r"] + 2 * d["r"] for d in dust)]
+    for i, p in enumerate(dust, 1):
+        p["id"] = i
+        p.update(raw_norm(p["x"], p["y"], geom))
+        p["radius_raw_norm"] = round(p["r"] * 2 / geom["raw_width"], 5)
+    m = {"version": MAP_VERSION, "signature": sig, "camera": camera, "roll": roll_key,
+         "frames": used, "skipped": skipped, "geometry": geom, "background_frames": background,
+         "threshold_frames": threshold, "background_frames_large": lbackground,
+         "threshold_frames_large": lthreshold, "dust": dust}
+    cache.write_text(json.dumps(m))
+    return m
+
+
+def _vote(cands: list[dict], H: int, W: int, q: int, radius, near: float, clear: int) -> list[dict]:
+    """Positions where candidates from several frames coincide, strongest first.
+    The grid is 1/q of half-size pixels; each frame votes once per place."""
     votes = np.zeros((H, W), np.float32)
     by_frame: dict[int, list] = {}
     for c in cands:
@@ -156,34 +266,29 @@ def build_map(frames: list[tuple[int, Path]], camera: str, roll_key: str,
     for cs in by_frame.values():
         m = np.zeros((H, W), np.uint8)
         for c in cs:
-            cv2.circle(m, (int(round(c["x"])), int(round(c["y"]))), 5, 1, -1)
+            cv2.circle(m, (int(round(c["x"] / q)), int(round(c["y"] / q))), int(round(radius(c))), 1, -1)
         votes += m
     peaks, v = [], votes.copy()
     while len(peaks) < 200:
         y, x = np.unravel_index(np.argmax(v), v.shape)
         if v[y, x] < 3:
             break
-        near = [c for c in cands if abs(c["x"] - x) <= 6 and abs(c["y"] - y) <= 6]
-        ids = sorted({c["id"] for c in near})
-        peaks.append({"x": round(float(np.mean([c["x"] for c in near])), 1),
-                      "y": round(float(np.mean([c["y"] for c in near])), 1),
-                      "frames": len(ids), "image_ids": ids,
-                      "r": round(float(np.median([c["r"] for c in near])), 1),
-                      "depth": round(float(np.median([c["depth"] for c in near])), 3)})
-        cv2.circle(v, (int(x), int(y)), 14, 0, -1)
+        hits = [c for c in cands if abs(c["x"] / q - x) <= near and abs(c["y"] / q - y) <= near]
+        ids = sorted({c["id"] for c in hits})
+        if hits:
+            peaks.append({"x": round(float(np.mean([c["x"] for c in hits])), 1),
+                          "y": round(float(np.mean([c["y"] for c in hits])), 1),
+                          "frames": len(ids), "image_ids": ids,
+                          "r": round(float(np.median([c["r"] for c in hits])), 1),
+                          "depth": round(float(np.median([c["depth"] for c in hits])), 3)})
+        cv2.circle(v, (int(x), int(y)), clear, 0, -1)
+    return peaks
+
+
+def _background(peaks: list[dict]) -> float:
+    """The typical count of the strongest positions that aren't dust."""
     counts = sorted((p["frames"] for p in peaks), reverse=True)
-    background = float(np.median(counts[2:40])) if len(counts) > 5 else 3.0
-    threshold = max(min_frames, background_factor * background)
-    dust = [p for p in peaks if p["frames"] >= threshold]
-    for i, p in enumerate(dust, 1):
-        p["id"] = i
-        p.update(raw_norm(p["x"], p["y"], geom))
-        p["radius_raw_norm"] = round(p["r"] * 2 / geom["raw_width"], 5)
-    m = {"version": MAP_VERSION, "signature": sig, "camera": camera, "roll": roll_key,
-         "frames": used, "skipped": skipped, "geometry": geom, "background_frames": background,
-         "threshold_frames": threshold, "dust": dust}
-    cache.write_text(json.dumps(m))
-    return m
+    return float(np.median(counts[2:40])) if len(counts) > 5 else 3.0
 
 
 # ── coordinates ───────────────────────────────────────────────────────────────
@@ -222,6 +327,9 @@ def spots_in_frame(lum: np.ndarray, dust_map: dict) -> list[dict]:
     _bg, rel, _noise = _maps(lum)
     h, w = rel.shape
     for d in dust_map["dust"]:
+        if d.get("size") == "large":
+            out.append(_large_in_frame(lum, d))
+            continue
         x, y = int(round(d["x"])), int(round(d["y"]))
         win = rel[max(0, y - 4):min(h, y + 5), max(0, x - 4):min(w, x + 5)]
         yy, xx = np.unravel_index(np.argmin(win), win.shape)
@@ -233,9 +341,34 @@ def spots_in_frame(lum: np.ndarray, dust_map: dict) -> list[dict]:
         out.append({"id": d["id"], "x": float(max(0, x - 4) + xx), "y": float(max(0, y - 4) + yy),
                     "r": d["r"], "depth": round(depth, 4), "ratio": round(ratio, 1),
                     "texture": round(tex, 4), "status": status, "visible": status != "hidden",
-                    "roll_frames": d["frames"],
+                    "roll_frames": d["frames"], "size": "small",
                     "background": "smooth" if tex < 0.012 else "moderate" if tex < 0.02 else "textured"})
     return out
+
+
+def _large_in_frame(lum: np.ndarray, d: dict) -> dict:
+    """A large mapped blob in this frame. Calibrated on the 20250824 roll's
+    ~140 px blob against crops of all 132 frames. Its contrast ratio against
+    the ring 1.5-3 radii out is low on graded skies, and a cloud's edge can
+    darken as much as the blob; what tells them apart is that the blob is
+    even all round (darkening vs. the spread between sides of a close ring:
+    1.0-2.6 for the blob, 0.3-0.65 for cloud edges).
+      obvious  — darkening >= 2.5 %, fine texture < 2 %, and even (>= 1.5x
+                 the spread) or contrast ratio >= 6
+      visible  — darkening >= 2.5 %, fine texture < 2 %, even (>= 0.8x);
+                 or darkening >= 1.2 %, ratio >= 4, fine texture < 3 %
+      hidden   — otherwise (texture, branches, clouds, noise)"""
+    m = measure_large(lum, d["x"], d["y"], d["r"])
+    ratio = m["depth"] / max(m["ring"], 1e-4)
+    even = m["depth"] / max(m["lopsided"], 1e-4)
+    base = m["depth"] >= 0.025 and m["texture"] < 0.02
+    status = ("obvious" if base and (even >= 1.5 or ratio >= 6) else
+              "visible" if (base and even >= 0.8) or (m["depth"] >= 0.012 and ratio >= 4 and m["texture"] < 0.03)
+              else "hidden")
+    return {"id": d["id"], "x": d["x"], "y": d["y"], "r": d["r"], "depth": m["depth"],
+            "ratio": round(ratio, 1), "texture": m["texture"], "status": status,
+            "visible": status != "hidden", "roll_frames": d["frames"], "size": "large",
+            "background": "smooth" if m["texture"] < 0.012 else "moderate" if m["texture"] < 0.02 else "textured"}
 
 
 def crop_sheet(lum: np.ndarray, spots: list[dict], tile: int = 180, half_window: int = 40) -> bytes:
@@ -244,12 +377,13 @@ def crop_sheet(lum: np.ndarray, spots: list[dict], tile: int = 180, half_window:
     for s in spots:
         x, y = int(round(s["x"])), int(round(s["y"]))
         h, w = lum.shape
-        x0, y0 = min(max(0, x - half_window), w - 2 * half_window), min(max(0, y - half_window), h - 2 * half_window)
-        c = lum[y0:y0 + 2 * half_window, x0:x0 + 2 * half_window]
+        hw = max(half_window, int(2.5 * s["r"]))         # large blobs need a wider view
+        x0, y0 = min(max(0, x - hw), w - 2 * hw), min(max(0, y - hw), h - 2 * hw)
+        c = lum[y0:y0 + 2 * hw, x0:x0 + 2 * hw]
         c = np.clip((c - c.mean()) / (6 * c.std() + 1e-6) + 0.5, 0, 1)
         t = cv2.cvtColor(cv2.resize((c * 255).astype(np.uint8), (tile, tile), interpolation=cv2.INTER_NEAREST),
                          cv2.COLOR_GRAY2BGR)
-        k = tile / (2 * half_window)
+        k = tile / (2 * hw)
         col = (60, 200, 60) if s.get("visible", True) else (60, 60, 220)
         cv2.circle(t, (int((x - x0) * k), int((y - y0) * k)), int(max(4, s["r"] * 1.8 * k)), col, 1)
         cv2.putText(t, f"#{s['id']}", (4, 16), cv2.FONT_HERSHEY_SIMPLEX, 0.5, col, 1)
@@ -262,10 +396,11 @@ def crop_sheet(lum: np.ndarray, spots: list[dict], tile: int = 180, half_window:
 
 # ── repair planning ───────────────────────────────────────────────────────────
 
-def heal_radius(r_dust: float) -> float:
+def heal_radius(r_dust: float, size: str = "small") -> float:
     """Heal circle radius (half-size px) for a dust spot of radius r_dust: twice
-    the detected radius covers the soft edge of the shadow."""
-    return max(6.0, 2.0 * r_dust)
+    the detected radius covers the soft edge of a small shadow; a large blob's
+    radius is measured out to its soft edge already, 1.5x covers it."""
+    return max(6.0, (1.5 if size == "large" else 2.0) * r_dust)
 
 
 def choose_source(lum: np.ndarray, x: float, y: float, R: float, avoid: list[tuple[float, float, float]]) -> dict | None:
