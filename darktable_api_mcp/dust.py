@@ -204,11 +204,15 @@ def build_map(frames: list[tuple[int, Path]], camera: str, roll_key: str,
     non-dust positions) different frames. Cached in cache/dust/.
     """
     CACHE.mkdir(parents=True, exist_ok=True)
-    sig = hashlib.sha1("|".join(sorted(_file_key(p) for _, p in frames)).encode()).hexdigest()[:12]
+    keys = sorted(_file_key(p) for _, p in frames)
+    sig = hashlib.sha1("|".join(keys).encode()).hexdigest()[:12]
     cache = CACHE / f"{roll_key}_{camera.replace(' ', '_')}.json"
     if cache.exists() and not force:
         m = json.loads(cache.read_text())
-        if m.get("version") == MAP_VERSION and m.get("signature") == sig:
+        # also valid for fewer frames of the same roll (photos removed from
+        # the library, a demo library): the dust is still on the sensor
+        if m.get("version") == MAP_VERSION and (m.get("signature") == sig
+                                                or set(keys) <= set(m.get("files", []))):
             return m
     cands, large, geom, used, skipped = [], [], None, 0, []
     for imgid, path in frames:
@@ -248,7 +252,7 @@ def build_map(frames: list[tuple[int, Path]], camera: str, roll_key: str,
         p["id"] = i
         p.update(raw_norm(p["x"], p["y"], geom))
         p["radius_raw_norm"] = round(p["r"] * 2 / geom["raw_width"], 5)
-    m = {"version": MAP_VERSION, "signature": sig, "camera": camera, "roll": roll_key,
+    m = {"version": MAP_VERSION, "signature": sig, "files": keys, "camera": camera, "roll": roll_key,
          "frames": used, "skipped": skipped, "geometry": geom, "background_frames": background,
          "threshold_frames": threshold, "background_frames_large": lbackground,
          "threshold_frames_large": lthreshold, "dust": dust}
