@@ -49,6 +49,8 @@ owner.
 | `paste_edit` | one photo's edit, or some of its modules, onto other photos (append or overwrite), as darktable's copy and paste |
 | `list_pickers`, `use_picker` | a module's color pickers and auto buttons (exposure's picker, color calibration's white balance picker, AgX's auto tune levels, tone equalizer's wands, ...), used as clicking them in darktable: on the photo in darktable's darkroom, with darktable's window serving the library |
 | `render_preview` | darktable's rendering of the current, unsaved edit (image); `uncropped=True` shows the whole photo to choose a crop on; `zoom=1` a region at 100%; `history_step` an earlier step (before/after) |
+| `compare_before_after`, `mark_before` | before and after of the edit (both renders, for Claude), shown to the user as a before/after slider in the web app and, for the photo in darktable's darkroom, a snapshot in darktable's snapshots panel split against the edit; "before" is the step before Claude's first edit of the photo, or where `mark_before` put it |
+| `propose_alternatives`, `apply_alternative`, `keep_alternative` | labeled alternatives (crops, B&W filters, looks: changes as calls of the editing tools) rendered without touching the edit, shown to the user as a strip in the web app; apply the one picked, or keep it as a duplicate photo with its version name set |
 | `save`, `discard_changes`, `start_over` | write the edit to the library; reopen as saved; delete the edit and apply darktable's defaults again (asks for `confirm`) |
 | `library_status`, `release_library`, `acquire_library`, `takeover_library` | hand the library to darktable's GUI and take it back; `takeover_library` asks a running darktable to quit the normal way (asks for `confirm`, never kills it) |
 
@@ -100,6 +102,7 @@ photos are only read.
 | `DTAPI_CONFIGDIR` | required | the darktable config dir to use: the copy's `config` folder |
 | `DTAPI_CACHEDIR` | default: next to it, `cache` | the engine's darktable cache |
 | `DTAPI_SOCKET` | default: `darktable-api.sock` next to the config dir (or `/tmp/darktable-api-<uid>-<hash>.sock` if that path is too long) | where the engine listens; every app using the library must use the same one |
+| `DTAPI_VARIANTS_DIR` | default: `~/.cache/darktable-api-mcp/variants` | where `propose_alternatives` renders the alternatives (the web app serves them from there: set it the same for both) |
 | `DTAPI_GUI_BIN` | default: `darktable` next to `DTAPI_BIN` | the only darktable `takeover_library` may quit |
 
 ### Claude Code

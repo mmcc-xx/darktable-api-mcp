@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
+import time
 from pathlib import Path
 from typing import Any
 
@@ -54,8 +56,14 @@ white balance off). Creative B&W: then move_module(it, after the tone
 mapper, e.g. "agx"). Curves:
 get_curve / set_curve (rgbcurve, tonecurve, colorzones, basecurve).
 duplicate_photo makes a version (e.g. a B&W one beside the color one).
-Before/after: render_preview(history_step=0) shows the original without
-undoing. compress_history tidies the history (and saves).
+Before/after: when the user asks to see what you changed, use
+compare_before_after (it shows the comparison in the web app and in
+darktable's darkroom, and gives you both renders); mark_before starts a new
+"before" for a new request. render_preview(history_step=0) only shows you
+the original. Choices (crops, B&W filters, looks): propose_alternatives
+renders labeled versions without applying them and shows them to the user;
+apply_alternative / keep_alternative (as a duplicate) after the user picks.
+compress_history tidies the history (and saves).
 AI denoise: ai_denoise (darktable's neural restore on the raw: a new, cleaner
 DNG photo beside the original, in its group; edit that one). It runs as a
 background job: job_status / list_jobs / cancel_job.
@@ -117,12 +125,26 @@ async def _require(*names: str) -> None:
                             "it needs a newer darktable-api build (restart darktable or the engine)")
 
 
+# methods that change an edit: the first one on a photo marks compare_before_after's "before"
+_EDIT_METHODS = {"module_set", "module_enable", "preset_apply", "blend_set", "curve_set", "geometry_set",
+                 "mask_add", "mask_ai", "mask_remove", "retouch_heal", "retouch_add", "retouch_set",
+                 "retouch_remove", "module_add", "module_remove", "module_move", "module_rename"}
+_before: dict[int, int] = {}    # photo -> history step before your first edit of it
+
+
+async def _note_before(image_id: int) -> None:
+    if image_id not in _before:
+        _before[image_id] = (await engine.edit(image_id, "history_list"))["history_end"]
+
+
 async def _edit(image_id: int | None, method: str, **params) -> dict:
     if image_id is None:
         image_id = engine.image_id
     if image_id is None:
         raise ToolError("no photo is open: call open_photo(image_id) first")
     try:
+        if method in _EDIT_METHODS:
+            await _note_before(image_id)
         return await engine.edit(image_id, method, **params)
     except EngineError as exc:
         raise _err(exc)
@@ -672,6 +694,237 @@ async def render_preview(size: int = 1200, uncropped: bool = False, zoom: float 
     return Image(data=r[0], format="jpeg")
 
 
+# ── comparing: before/after, alternatives ────────────────────────────────────
+
+VARIANTS_DIR = Path(os.environ.get("DTAPI_VARIANTS_DIR") or Path.home() / ".cache/darktable-api-mcp/variants")
+_proposals: dict[int, list[dict]] = {}   # photo -> the alternatives last proposed
+
+
+async def _share(kind: str, image_id: int, data: dict) -> bool:
+    """Tell the user's other apps (the web app) to show something; False if
+    this darktable can't relay it."""
+    try:
+        if not await engine.supports("share"):
+            return False
+        await engine.call("share", kind=kind, imgid=image_id, data=data)
+        return True
+    except EngineError:
+        return False
+
+
+def _step_label(items: list[dict], step: int) -> str:
+    if step == 0:
+        return "the original"
+    it = items[step - 1] if step - 1 < len(items) else {}
+    return f"step {step} ({it.get('label') or it.get('operation', '?')})"
+
+
+@mcp.tool()
+async def mark_before() -> dict:
+    """Make the open photo's current step the "before" of
+    compare_before_after. Call it when you start on a new request, so the
+    comparison shows what that request changed; otherwise "before" is the
+    step before your first edit of the photo."""
+    image_id = engine.image_id
+    if image_id is None:
+        raise ToolError("no photo is open: call open_photo(image_id) first")
+    _before[image_id] = (await _edit(image_id, "history_list"))["history_end"]
+    return {"before_step": _before[image_id]}
+
+
+@mcp.tool(structured_output=False)
+async def compare_before_after(before_step: int | None = None, show_user: bool = True, size: int = 900) -> list:
+    """Before and after of the open photo: both renders (before first) for
+    you to judge, and with show_user the comparison in front of the user:
+    the web app's photo page shows a before/after slider, and if the photo
+    is in darktable's darkroom, darktable's snapshots panel gets a snapshot
+    of the before step, shown split against the edit (drag the line to
+    compare; click the snapshot to hide it). Nothing is undone.
+    before_step: history step (0 = the original, as get_history counts);
+    default: the step before your first edit of this photo (or the one
+    mark_before set)."""
+    image_id = engine.image_id
+    if image_id is None:
+        raise ToolError("no photo is open: call open_photo(image_id) first")
+    await _require("render.history_end")
+    hist = await _edit(image_id, "history_list")
+    end, items = hist["history_end"], hist["items"]
+    step = before_step if before_step is not None else _before.get(image_id, 0)
+    if not 0 <= step <= len(items):
+        raise ToolError(f"before_step must be 0..{len(items)}")
+    if step == end:
+        raise ToolError(f"before and after are the same step ({end}): nothing to compare; "
+                        "give before_step (0 = the original)")
+    size = max(64, min(size, 2560))
+    try:
+        before = await engine.render(image_id, size, size, False, {"history_end": step})
+        after = await engine.render(image_id, size, size, False)
+    except EngineError as exc:
+        raise _err(exc)
+    if before is None or after is None:
+        raise ToolError("overtaken by a newer render request: try again")
+    shown = []
+    if show_user:
+        if await _share("compare", image_id, {"history_end": step, "after_end": end,
+                                              "before_label": _step_label(items, step),
+                                              "after_label": _step_label(items, end)}):
+            shown.append("the web app's photo page (a before/after slider)")
+        try:
+            st = await engine.call("library_status")
+            if st.get("darkroom_imgid") == image_id and await engine.supports("darkroom_snapshot"):
+                await engine.call("darkroom_snapshot", history_end=step)
+                shown.append("darktable's darkroom (a snapshot of the before step, split against the edit)")
+        except EngineError as exc:
+            shown.append(f"not darktable's darkroom: {exc}")
+    note = (f"before: {_step_label(items, step)}; after: {_step_label(items, end)} (the current edit). "
+            + (f"Shown to the user in {' and '.join(shown)}." if shown else "Not shown to the user."))
+    return [f"BEFORE ({_step_label(items, step)}):", Image(data=before[0], format="jpeg"),
+            f"AFTER ({_step_label(items, end)}):", Image(data=after[0], format="jpeg"), note]
+
+
+# the tools an alternative's changes may use, and the engine method each is
+_CHANGE_TOOLS = {"set_module": "module_set", "enable_module": "module_enable", "apply_preset": "preset_apply",
+                 "set_blending": "blend_set", "set_curve": "curve_set", "crop_photo": "geometry_set",
+                 "rotate_photo": "geometry_set"}
+
+
+def _steps(changes: list[dict]) -> list[dict]:
+    """An alternative's changes (tool calls) as engine steps."""
+    steps = []
+    for ch in changes:
+        ch = dict(ch)
+        tool = ch.pop("tool", None)
+        if tool not in _CHANGE_TOOLS:
+            raise ToolError(f"a change's tool must be one of {', '.join(_CHANGE_TOOLS)} (got {tool!r})")
+        if tool == "crop_photo":
+            p: dict[str, Any] = {}
+            if ch.get("remove"):
+                p["crop"] = None
+            elif any(k in ch for k in ("left", "top", "right", "bottom")):
+                p["crop"] = {k: ch[k] for k in ("left", "top", "right", "bottom")}
+            if ch.get("aspect"):
+                p["aspect"] = ch["aspect"]
+        elif tool == "rotate_photo":
+            p = {k2: ch[k1] for k1, k2 in (("degrees", "rotate"), ("angle", "angle"), ("mirror", "flip"),
+                                            ("autocrop", "autocrop")) if ch.get(k1) is not None}
+        else:
+            p = {"instance": 0, **ch}
+        if not p:
+            raise ToolError(f"a {tool} change changes nothing: {ch}")
+        steps.append({"method": _CHANGE_TOOLS[tool], "params": p})
+    return steps
+
+
+@mcp.tool(structured_output=False)
+async def propose_alternatives(alternatives: list[dict], size: int = 800, show_user: bool = True) -> list:
+    """Render alternative versions of the open photo for the user to choose
+    from, without changing the edit: different crops, black and white
+    filters, looks, ... Each is applied to a copy of the current edit,
+    rendered, and dropped. With show_user, the web app's photo page shows
+    them as a strip the user can pick from (its Apply button applies one).
+    Then apply_alternative(choice) applies the one the user picks, or
+    keep_alternative(choice) makes it a duplicate photo.
+
+    alternatives: 2-8 of {"label": "B&W, red filter", "changes": [...]},
+    each change a tool call as {"tool": name, ...its arguments}:
+      set_module (operation, values, instance), enable_module (operation,
+      enabled, instance), apply_preset (operation, name, instance),
+      set_blending (operation, values, instance), set_curve (operation,
+      points, channel, type, instance), crop_photo (left, top, right,
+      bottom, aspect, remove), rotate_photo (degrees, angle, mirror).
+    e.g. {"label": "square", "changes": [{"tool": "crop_photo", "aspect": "square"}]}
+    Alternatives can't add module instances: add one first if they need it
+    (e.g. add_module_instance("channelmixerrgb"), enable_module(it, False),
+    then each alternative enables it with its own preset or gray mix)."""
+    image_id = engine.image_id
+    if image_id is None:
+        raise ToolError("no photo is open: call open_photo(image_id) first")
+    await _require("render_variants")
+    if not 2 <= len(alternatives) <= 8:
+        raise ToolError("give 2 to 8 alternatives")
+    folder = VARIANTS_DIR / f"{image_id}-{time.strftime('%Y%m%d-%H%M%S')}"
+    folder.mkdir(parents=True, exist_ok=True)
+    props = []
+    for k, alt in enumerate(alternatives):
+        label = str(alt.get("label") or f"alternative {k + 1}")
+        props.append({"label": label, "changes": alt.get("changes") or [],
+                      "steps": _steps(alt.get("changes") or []), "path": str(folder / f"{k + 1}.jpg")})
+    size = max(64, min(size, 2560))
+    r = await _edit(image_id, "render_variants", width=size, height=size,
+                    variants=[{"label": p["label"], "path": p["path"], "steps": p["steps"]} for p in props])
+    out: list = []
+    for k, (p, v) in enumerate(zip(props, r["variants"])):
+        if v.get("error"):
+            p["error"] = v["error"]
+            out.append(f"{k + 1}. {p['label']}: FAILED: {v['error']}")
+        else:
+            out += [f"{k + 1}. {p['label']}:", Image(data=Path(p["path"]).read_bytes(), format="jpeg")]
+    _proposals[image_id] = props
+    good = [p for p in props if "error" not in p]
+    shown = show_user and good and await _share(
+        "variants", image_id, {"variants": [{"number": k + 1, "label": p["label"], "path": p["path"],
+                                             "steps": p["steps"]} for k, p in enumerate(props) if "error" not in p]})
+    out.append("Nothing was applied. " + ("The user sees them in the web app's photo page. " if shown else "")
+               + "apply_alternative(number or label) applies one; keep_alternative makes one a duplicate photo.")
+    return out
+
+
+def _proposal(image_id: int, choice: int | str) -> dict:
+    props = _proposals.get(image_id)
+    if not props:
+        raise ToolError("no alternatives proposed for this photo: propose_alternatives first")
+    for k, p in enumerate(props):
+        if choice == k + 1 or (isinstance(choice, str) and (choice.strip().lower() == p["label"].lower()
+                                                            or choice.strip() == str(k + 1))):
+            if "error" in p:
+                raise ToolError(f"that alternative failed to render: {p['error']}")
+            return p
+    raise ToolError("no such alternative: " + "; ".join(f"{k + 1}. {p['label']}" for k, p in enumerate(props)))
+
+
+@mcp.tool()
+async def apply_alternative(choice: int | str) -> dict:
+    """Apply one of the alternatives propose_alternatives showed (its number
+    or label) to the open photo, as history steps. Not saved until save."""
+    image_id = engine.image_id
+    if image_id is None:
+        raise ToolError("no photo is open")
+    p = _proposal(image_id, choice)
+    for st in p["steps"]:
+        await _edit(image_id, st["method"], **st["params"])
+    hist = await _edit(image_id, "history_list")
+    await _share("variants", image_id, {"applied": p["label"]})
+    return {"applied": p["label"], "history_end": hist["history_end"]}
+
+
+@mcp.tool()
+async def keep_alternative(choice: int | str, save_first: bool = False) -> dict:
+    """Keep one of the alternatives as a duplicate photo (a new version of
+    the same raw, as darktable's duplicate), with the current edit plus
+    that alternative, saved, its version name set to the label. The open
+    photo is unchanged. E.g. keep a B&W version beside the color one. The
+    duplicate gets the photo's saved edit: if it has unsaved changes,
+    save_first=True saves them first (ask the user; they may be theirs).
+    The user can compare duplicates side by side in darktable's culling
+    view (X in the lighttable)."""
+    image_id = engine.image_id
+    if image_id is None:
+        raise ToolError("no photo is open")
+    p = _proposal(image_id, choice)
+    dup = await duplicate_photo(image_id, save_first=save_first)
+    new_id = dup["image"]["id"]
+    for st in p["steps"]:
+        await _edit(new_id, st["method"], **st["params"])
+    await _edit(new_id, "save")
+    try:
+        if await engine.supports("set_metadata"):
+            await engine.call("set_metadata", imgids=[new_id], values={"version name": p["label"]})
+    except EngineError:
+        pass
+    return {"kept": p["label"], "duplicate_id": new_id,
+            "note": "the open photo is unchanged; open_photo(duplicate_id) to edit the duplicate"}
+
+
 @mcp.tool()
 async def export_photo(image_id: int | None = None, format: str | None = None, size: int | None = None,
                        quality: int | None = None, high_quality: bool | None = None,
@@ -744,6 +997,7 @@ async def discard_changes() -> dict:
     """Throw away unsaved changes: reopen the open photo as saved."""
     if engine.image_id is None:
         raise ToolError("no photo is open")
+    _before.pop(engine.image_id, None)
     return await open_photo(engine.image_id, discard_unsaved=True)
 
 
@@ -754,6 +1008,8 @@ async def start_over(confirm: bool = False) -> dict:
     presets), saved immediately. Ask the user first; pass confirm=True."""
     if not confirm:
         raise ToolError("start_over deletes the whole edit: ask the user, then pass confirm=True")
+    if engine.image_id is not None:
+        _before.pop(engine.image_id, None)
     return await _edit(None, "reset")
 
 
@@ -1371,6 +1627,7 @@ async def heal_dust_spots(image_id: int | None = None, spots: list[int] | None =
 
     try:
         before = await _spot_crops(image_id, plan)
+        await _note_before(image_id)
         r = await engine.edit(image_id, "retouch_heal", spots=[p["spec"] for p in plan])
         after = await _spot_crops(image_id, plan)
     except EngineError as exc:
