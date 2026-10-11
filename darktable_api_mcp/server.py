@@ -490,6 +490,29 @@ async def duplicate_photo(image_id: int | None = None, virgin: bool = False, sav
 
 
 @mcp.tool()
+async def remove_photos(image_ids: list[int], confirm: bool = False) -> dict:
+    """Remove photos from the darktable library, as the lighttable's
+    "remove" does: each photo's library entry and edit are deleted; the raw
+    file on disk stays, and so do other versions (duplicates) of it. E.g.
+    a duplicate made for an experiment. Refused (nothing removed) for the
+    photo open in darktable's darkroom, a photo with unsaved changes, or one
+    used as an overlay. Can't be undone: say which photos (ids and file
+    names, with list_images / image_info) and ask the user, then pass
+    confirm=True. Returns the removed ids."""
+    await _require("image_remove")
+    if not confirm:
+        raise ToolError("removing photos can't be undone: tell the user which ones (id, file name, version), "
+                        "ask, then pass confirm=True")
+    try:
+        r = await engine.call("image_remove", imgids=image_ids)
+    except EngineError as exc:
+        raise _err(exc)
+    if engine.image_id in r.get("removed", []):
+        engine.image_id = None
+    return r
+
+
+@mcp.tool()
 async def remove_module_instance(operation: str, instance: int) -> dict:
     """Delete one instance of a module (not a module's only instance: switch
     that off with enable_module). Its history steps go with it, as in
