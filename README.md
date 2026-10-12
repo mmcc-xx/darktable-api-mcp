@@ -10,6 +10,22 @@ the API as well instead, sharing the photo open in its darkroom live. A few
 tools require running darktable with the GUI (the color pickers and auto buttons, and switching
 darktable's darkroom to a photo), but most edits can be done headlessly. No Lua script or XMP editing is involved.
 
+**What's included:**
+
+- **77 MCP tools** ([list](#tools)): browse the library, rate, label and tag
+  photos; open a photo and change any module's settings, with previews to
+  check each step; presets and styles; crop and rotate; masks (drawn shapes,
+  parametric ranges, AI object masks); curves; finding and healing sensor
+  dust and other retouching; AI denoise; before/after comparisons and
+  alternative versions to choose from; export.
+- **6 [skills](#skills)** that teach the AI whole tasks:
+  `darktable-edit` (a full develop in darktable's scene-referred
+  workflow), `darktable-mono` (black and white), `darktable-local` (masks,
+  dodge and burn), `darktable-cleanup` (dust, noise, sharpening),
+  `darktable-batch` (one look across several photos) and
+  `darktable-review` (a critique with concrete suggestions, without
+  changing anything).
+
 **This is experimental.** I recommend using it on a copy of your library (the copy script below
 does that). Saving writes darktable's history in the engine's module
 versions, which an older darktable may not be able to read.
