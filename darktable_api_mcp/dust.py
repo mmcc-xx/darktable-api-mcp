@@ -396,7 +396,7 @@ def detect_in_render(lum: np.ndarray, k: float = 3.0, min_depth: float = 0.004, 
     landscape (5-25 % dark) and noise or cloud gradients in noisy skies
     (1-2 %, contrast 2-3) are what it finds instead. Those noisy skies can't
     be told from faint dust in one frame: the best few are reported, and a
-    person (or Claude) judges the crop sheet before healing.
+    person (or the AI) judges the crop sheet before healing.
       obvious  — darkening >= 1.5 %, contrast vs the ring >= 4, even >= 2.5,
                  score >= 5
       visible  — darkening 0.8-5 %, contrast >= 2, even >= 1.2

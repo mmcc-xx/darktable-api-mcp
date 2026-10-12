@@ -1,7 +1,7 @@
 # darktable-api-mcp
 
 An [MCP](https://modelcontextprotocol.io) server that lets an AI assistant
-(Claude, or any MCP client) browse a [darktable](https://www.darktable.org/)
+(any MCP client, e.g. Claude) browse a [darktable](https://www.darktable.org/)
 library and edit photos. All the work is done by **darktable-api**, a
 long-running headless darktable built from darktable's own code: it renders
 previews, applies module settings and writes the history to the library
@@ -15,6 +15,109 @@ versions, which an older darktable may not be able to read.
 Written with AI assistance (Claude), directed and reviewed by the repository
 owner.
 
+## Quick start: engine, MCP server and web app
+
+The whole setup, in order, with everything under `~/src` (details in the
+sections below). Any MCP client works; the examples use Claude Code.
+Tested on macOS (Apple Silicon) and Ubuntu 24.04; other Linux
+distributions need the equivalent packages (darktable's README links build
+instructions for Fedora and others). Python 3.10 or later.
+
+1. **Install the build dependencies.**
+
+   macOS (Xcode command line tools and [Homebrew](https://brew.sh) first):
+
+       xcode-select --install
+       mkdir -p ~/src && cd ~/src
+       git clone -b darktable-api --recurse-submodules https://github.com/mmcc-xx/darktable.git
+       brew bundle --file=darktable/.ci/Brewfile
+
+   Ubuntu 24.04:
+
+       sudo apt install git build-essential python3-venv cmake ninja-build \
+         intltool xsltproc libgtk-3-dev libjson-glib-dev liblcms2-dev \
+         libexiv2-dev liblensfun-dev libcurl4-openssl-dev libsqlite3-dev \
+         libxml2-dev libpugixml-dev librsvg2-dev libjpeg-dev libtiff-dev \
+         libopenexr-dev libwebp-dev libavif-dev libheif-dev libjxl-dev \
+         liblua5.4-dev libcolord-gtk-dev libgmic-dev libportmidi-dev \
+         libsecret-1-dev libraw-dev libgphoto2-dev libgraphicsmagick1-dev \
+         libopenjp2-7-dev libosmesa6-dev ocl-icd-opencl-dev libsdl2-dev \
+         libcups2-dev libpotrace-dev libarchive-dev
+       mkdir -p ~/src && cd ~/src
+       git clone -b darktable-api --recurse-submodules https://github.com/mmcc-xx/darktable.git
+
+2. **Build the engine** (darktable-api and a darktable from the same fork;
+   10–20 minutes the first time, the same on both systems):
+
+       cd ~/src/darktable
+       cmake -B build -G Ninja -DUSE_MCP=ON -DUSE_AI=ON
+       cmake --build build --target darktable-api darktable
+
+3. **Install the MCP server and copy your library.** The copy is the
+   library everything below works on; your own library and XMP files are
+   never written:
+
+       cd ~/src
+       git clone https://github.com/mmcc-xx/darktable-api-mcp.git
+       cd darktable-api-mcp
+       python3 -m venv .venv && .venv/bin/pip install -e '.[dust]'
+       .venv/bin/python make_library_copy.py    # ~/.config/darktable -> ./library-copy
+
+4. **Connect your MCP client.** It runs the server's command
+   (`.venv/bin/darktable-api-mcp`) with two environment variables:
+   `DTAPI_BIN` (the engine) and `DTAPI_CONFIGDIR` (the library copy's
+   `config` folder); [Install](#install) has a JSON example for clients
+   configured that way. With Claude Code, for example, which also loads
+   the skills (link them wherever your client looks for skills):
+
+       claude mcp add darktable-api \
+         -e DTAPI_BIN=$HOME/src/darktable/build/bin/darktable-api \
+         -e DTAPI_CONFIGDIR=$HOME/src/darktable-api-mcp/library-copy/config \
+         -- $HOME/src/darktable-api-mcp/.venv/bin/darktable-api-mcp
+       mkdir -p ~/.claude/skills
+       for s in ~/src/darktable-api-mcp/skills/*/; do ln -s "$s" ~/.claude/skills/; done
+
+5. **Run the web app on the same library copy**, so the browser and the AI
+   share one engine and one edit:
+
+       cd ~/src
+       git clone https://github.com/mmcc-xx/darktable-api-web.git
+       cd darktable-api-web
+       python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
+       DTAPI_BIN=$HOME/src/darktable/build/bin/darktable-api \
+       DTAPI_CONFIGDIR=$HOME/src/darktable-api-mcp/library-copy/config \
+           .venv/bin/uvicorn dtweb.main:app --port 8020 --timeout-graceful-shutdown 3
+
+   Open http://127.0.0.1:8020 (no authentication: keep it on 127.0.0.1).
+
+6. **Try it.** Start your client, check it lists the darktable-api server
+   (in Claude Code: `/mcp`), and ask e.g. "list my last film roll" or
+   "open photo 12 and do a basic edit". The web page follows along live.
+
+7. **Optional: darktable's own window** on the same library, shared live
+   with the browser and the AI:
+
+       ~/src/darktable/build/bin/darktable \
+         --configdir ~/src/darktable-api-mcp/library-copy/config \
+         --cachedir ~/src/darktable-api-mcp/library-copy/cache \
+         --api-socket ~/src/darktable-api-mcp/library-copy/darktable-api.sock
+
+The AI mask and AI denoise tools need darktable's AI models: download them
+in that darktable's preferences (AI tab).
+
+**Linux:** darktable run from the build folder can't find ONNX Runtime (it
+loads it by file name), so the AI tools fail until you point the library
+copy at it, with darktable's window closed:
+
+    echo "plugins/ai/ort_library_path=$(ls ~/src/darktable/build/_deps/onnxruntime/lib/libonnxruntime.so.*.*.*)" \
+      >> ~/src/darktable-api-mcp/library-copy/config/darktablerc
+
+(or `sudo cmake --install build` in `~/src/darktable`, which installs this
+darktable over any packaged one). darktable's window on Linux needs a
+desktop session; the engine, MCP server and web app run headless, e.g. on
+a server over SSH, with the web app reached through an SSH tunnel
+(`ssh -L 8020:127.0.0.1:8020 server`).
+
 ## Tools
 
 | Tool | Does |
@@ -23,7 +126,7 @@ owner.
 | `get_thumbnail` | darktable's thumbnail of a photo (image) |
 | `make_thumbnails` | thumbnails in bulk (photos, a film roll, the whole library) rendered into darktable's thumbnail cache, as a background job |
 | `get_photo_metadata`, `list_tags`, `set_tags`, `set_metadata`, `set_location` | tags, metadata (title, description, creator, ...) and location, as darktable's tagging, metadata editor and geotagging |
-| `photo_sheet`, `tag_photos` | tagging by content: pages of thumbnails with each photo's id, date, camera, place and tags for Claude to look at, then each photo's own tags applied in one call |
+| `photo_sheet`, `tag_photos` | tagging by content: pages of thumbnails with each photo's id, date, camera, place and tags for the AI to look at, then each photo's own tags applied in one call |
 | `set_rating`, `set_color_label` | rate (0–5), reject, color labels, as darktable's lighttable |
 | `open_photo` | open a photo for editing (joins an edit already open in another app, unsaved changes included) |
 | `open_in_darkroom`, `get_collection` | switch darktable's darkroom to a photo; the photos darktable's lighttable shows, and the selection |
@@ -51,7 +154,7 @@ owner.
 | `paste_edit` | one photo's edit, or some of its modules, onto other photos (append or overwrite), as darktable's copy and paste |
 | `list_pickers`, `use_picker` | a module's color pickers and auto buttons (exposure's picker, color calibration's white balance picker, AgX's auto tune levels, tone equalizer's wands, ...), used as clicking them in darktable: on the photo in darktable's darkroom, with darktable's window serving the library |
 | `render_preview` | darktable's rendering of the current, unsaved edit (image); `uncropped=True` shows the whole photo to choose a crop on; `zoom=1` a region at 100%; `history_step` an earlier step (before/after) |
-| `compare_before_after`, `mark_before` | before and after of the edit (both renders, for Claude), shown to the user as a before/after slider in the web app and, for the photo in darktable's darkroom, a snapshot in darktable's snapshots panel split against the edit; "before" is the step before Claude's first edit of the photo, or where `mark_before` put it |
+| `compare_before_after`, `mark_before` | before and after of the edit (both renders, for the AI), shown to the user as a before/after slider in the web app and, for the photo in darktable's darkroom, a snapshot in darktable's snapshots panel split against the edit; "before" is the step before the AI's first edit of the photo, or where `mark_before` put it |
 | `propose_alternatives`, `apply_alternative`, `keep_alternative` | labeled alternatives (crops, B&W filters, looks: changes as calls of the editing tools) rendered without touching the edit, shown to the user as a strip in the web app; apply the one picked, or keep it as a duplicate photo with its version name set |
 | `save`, `discard_changes`, `start_over` | write the edit to the library; reopen as saved; delete the edit and apply darktable's defaults again (asks for `confirm`) |
 | `library_status`, `release_library`, `acquire_library`, `takeover_library` | hand the library to darktable's GUI and take it back; `takeover_library` asks a running darktable to quit the normal way (asks for `confirm`, never kills it) |
@@ -132,15 +235,16 @@ photos are only read.
 
 ### Skills
 
-`skills/` holds Agent Skills that teach Claude how to use the tools for
-whole tasks: `darktable-edit` (darktable's standard scene-referred
+`skills/` holds [Agent Skills](https://agentskills.io) that teach the AI how
+to use the tools for whole tasks (for clients that load skills, such as
+Claude Code): `darktable-edit` (darktable's standard scene-referred
 workflow), `darktable-mono` (black and white, with film filter mixes) and
 `darktable-cleanup` (dust, retouching, noise, sharpening, fringes),
 `darktable-local` (masks and local edits), `darktable-batch` (one look
 across several photos) and `darktable-review` (critique and suggestions
 without changing anything).
-For Claude Code, link them into `~/.claude/skills/` (all projects) or a
-project's `.claude/skills/`:
+Link them where your client finds skills; for Claude Code, that is
+`~/.claude/skills/` (all projects) or a project's `.claude/skills/`:
 
     ln -s /path/to/darktable-api-mcp/skills/darktable-edit ~/.claude/skills/
 
