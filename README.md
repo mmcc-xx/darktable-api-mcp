@@ -35,9 +35,8 @@ owner.
 
 ## Quick start: engine, MCP server and web app
 
-The whole setup, in order, with everything under `~/src` (details in the
-sections below). Any MCP client works; the examples use Claude Code.
-Tested on macOS (Apple Silicon) and Ubuntu 24.04; other Linux
+These instructions will get the fork of darktable with the API, a web app, and the MCP server built and running.
+This has been tested on macOS (Apple Silicon) and Ubuntu 24.04; other Linux
 distributions need the equivalent packages (darktable's README links build
 instructions for Fedora and others). Python 3.10 or later.
 
