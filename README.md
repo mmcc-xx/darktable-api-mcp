@@ -92,7 +92,7 @@ instructions for Fedora and others). Python 3.10 or later.
        DTAPI_CONFIGDIR=$HOME/src/darktable-api-mcp/library-copy/config \
            .venv/bin/uvicorn dtweb.main:app --port 8020 --timeout-graceful-shutdown 3
 
-   Open http://127.0.0.1:8020 (no authentication: keep it on 127.0.0.1).
+   Open http://127.0.0.1:8020
 
 6. **Try it.** Start your client, check it lists the darktable-api server
    (in Claude Code: `/mcp`), and ask e.g. "list my last film roll" or
