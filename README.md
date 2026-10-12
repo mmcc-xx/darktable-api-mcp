@@ -27,7 +27,9 @@ instructions for Fedora and others). Python 3.10 or later.
 
 1. **Install the build dependencies.**
 
-   macOS (Xcode command line tools and [Homebrew](https://brew.sh) first):
+   macOS:
+
+   Install [Homebrew](https://brew.sh), then:
 
        xcode-select --install
        mkdir -p ~/src && cd ~/src
