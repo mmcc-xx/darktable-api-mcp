@@ -1,16 +1,16 @@
 # darktable-api-mcp
 
 An [MCP](https://modelcontextprotocol.io) server that lets an AI assistant
-(any MCP client, e.g. Claude) browse a [darktable](https://www.darktable.org/)
+(e.g. Claude, ChatGPT) browse a [darktable](https://www.darktable.org/)
 library and edit photos. All the work is done by **darktable-api**, darktable's
-own code running as a long-lived headless engine: it renders previews,
+own code running as a long-lived headless engine. The engine renders previews,
 applies module settings and writes the history to the library exactly as
 darktable does. darktable's own window (built from the same fork) can serve
-the library instead, sharing the photo open in its darkroom live; a few
-tools need it (the color pickers and auto buttons, and switching
-darktable's darkroom to a photo). No Lua script or XMP editing is involved.
+the API as well instead, sharing the photo open in its darkroom live. A few
+tools require running darktable with the GUI (the color pickers and auto buttons, and switching
+darktable's darkroom to a photo), but most edits can be done headlessly. No Lua script or XMP editing is involved.
 
-**Experimental.** Use it on a copy of your library (the copy script below
+**This is experimental.** I recommend using it on a copy of your library (the copy script below
 does that). Saving writes darktable's history in the engine's module
 versions, which an older darktable may not be able to read.
 
