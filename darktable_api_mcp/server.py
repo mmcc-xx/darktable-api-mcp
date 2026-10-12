@@ -46,7 +46,8 @@ Local edits: get_blending / set_blending (blend mode, opacity, parametric
 ranges, e.g. noise reduction only in the shadows), add_mask / list_masks /
 remove_mask (drawn circle, ellipse, gradient, path, brush stroke), add_ai_mask (darktable's AI
 object mask: click points on a subject, it is outlined). measure_photo reads values,
-histogram and clipping of the rendered photo.
+histogram and clipping of the rendered photo. zone_map shows the photo on the zone scale
+(Ansel Adams's print values 0-X) for black and white work.
 Instances: add_module_instance (e.g. a second color calibration for creative
 B&W, a second denoise pass), rename_module_instance, remove_module_instance.
 Black and white: add_module_instance("channelmixerrgb") (a new instance,
@@ -1182,6 +1183,87 @@ async def measure_photo(points: list[list[float]] | None = None, boxes: list[dic
         await _require("render.history_end")
         params["history_end"] = max(0, history_step)
     return await _edit(None, "sample", **params)
+
+
+_ROMAN = ["0", "I", "II", "III", "IV", "V", "VI", "VII", "VIII", "IX", "X"]
+
+
+@mcp.tool(structured_output=False)
+async def zone_map(points: list[list[float]] | None = None, highlight: list[int] | None = None,
+                   size: int = 800, history_step: int | None = None) -> list:
+    """The open photo as darktable renders it, reduced to Ansel Adams's
+    eleven print values (zones 0-X): each pixel is shown as the flat grey of
+    its zone, with a zone scale underneath. Zones are steps of 10 in Lab L
+    of the render (zone V = L 45-55, middle grey; 0 = L under 5, X = L 95
+    and up), a print's 1:100 range from black to paper white in equal
+    visual steps.
+
+    Returns the fraction of the photo in each zone, and for points
+    ([[x, y], ...] fractions of the photo) the L there and its zone as a
+    decimal (7.4 = between VII and VIII). highlight: zones to mark in red
+    on the map, e.g. [0, 1] to see where shadows block up, [9, 10] where
+    highlights burn out. history_step as render_preview (0 = the original).
+    For black and white edits; on a color photo it maps its brightness."""
+    from mcp.server.fastmcp import Image as McpImage
+    try:
+        import cv2
+        import numpy as np
+    except ImportError as exc:
+        raise ToolError(f"zone_map needs numpy and opencv: pip install 'darktable-api-mcp[dust]' ({exc})")
+    if engine.image_id is None:
+        raise ToolError("no photo is open: call open_photo(image_id) first")
+    size = max(128, min(size, 1600))
+    region = None
+    if history_step is not None:
+        await _require("render.history_end")
+        region = {"history_end": max(0, history_step)}
+    try:
+        r = await engine.render(engine.image_id, size, size, False, region)
+    except EngineError as exc:
+        raise _err(exc)
+    if r is None:
+        raise ToolError("overtaken by a newer render request")
+    im = cv2.imdecode(np.frombuffer(r[0], np.uint8), cv2.IMREAD_COLOR).astype(np.float32) / 255.0
+    lin = np.where(im <= 0.04045, im / 12.92, ((im + 0.055) / 1.055) ** 2.4)
+    y = lin @ np.array([0.0722, 0.7152, 0.2126], np.float32)    # BGR
+    lab_l = np.where(y > 216 / 24389, 116 * np.cbrt(y) - 16, y * 24389 / 27)
+    zone = np.clip(np.floor(lab_l / 10 + 0.5), 0, 10).astype(np.uint8)
+
+    def grey(z: int) -> int:    # sRGB 8-bit value of L = 10 z
+        yy = ((10 * z + 16) / 116) ** 3 if z > 0.8 else 10 * z * 27 / 24389
+        return int(round(255 * (12.92 * yy if yy <= 0.0031308 else 1.055 * yy ** (1 / 2.4) - 0.055)))
+
+    lut = np.array([grey(z) for z in range(11)], np.uint8)
+    out = cv2.cvtColor(lut[zone], cv2.COLOR_GRAY2BGR)
+    for z in highlight or []:
+        if 0 <= z <= 10:
+            out[zone == z] = (40, 40, 230)
+    h, w = zone.shape
+    cell = max(w // 11, 24)
+    scale = np.full((max(cell // 2, 28), cell * 11, 3), 255, np.uint8)
+    for z in range(11):
+        scale[:, z * cell:(z + 1) * cell] = lut[z]
+        if z in (highlight or []):
+            scale[-6:, z * cell:(z + 1) * cell] = (40, 40, 230)
+        cv2.putText(scale, _ROMAN[z], (z * cell + 4, scale.shape[0] - 9), cv2.FONT_HERSHEY_SIMPLEX,
+                    0.45, (255, 255, 255) if z < 5 else (0, 0, 0), 1, cv2.LINE_AA)
+    pad = np.full((scale.shape[0], max(w, scale.shape[1]), 3), 255, np.uint8)
+    pad[:, :scale.shape[1]] = scale
+    body = np.full((h, pad.shape[1], 3), 255, np.uint8)
+    body[:, :w] = out
+    ok, png = cv2.imencode(".png", np.vstack([body, pad]))
+    counts = np.bincount(zone.ravel(), minlength=11) / zone.size
+    summary: dict[str, Any] = {"zones": {_ROMAN[z]: round(float(counts[z]), 4) for z in range(11)}}
+    if points:
+        pts = []
+        for x, yv in points:
+            px = min(max(int(x * w), 0), w - 1)
+            py = min(max(int(yv * h), 0), h - 1)
+            patch = lab_l[max(py - 2, 0):py + 3, max(px - 2, 0):px + 3]
+            lv = float(patch.mean())
+            pts.append({"x": x, "y": yv, "L": round(lv, 1), "zone": round(lv / 10, 1)})
+        summary["points"] = pts
+    return [json.dumps(summary), McpImage(data=png.tobytes(), format="png")]
 
 
 # ── blending and masks ───────────────────────────────────────────────────────

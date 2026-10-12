@@ -12,7 +12,7 @@ darktable's darkroom to a photo), but most edits can be done headlessly. No Lua 
 
 **What's included:**
 
-- **77 MCP tools** ([list](#tools)): browse the library, rate, label and tag
+- **78 MCP tools** ([list](#tools)): browse the library, rate, label and tag
   photos; open a photo and change any module's settings, with previews to
   check each step; presets and styles; crop and rotate; masks (drawn shapes,
   parametric ranges, AI object masks); curves; finding and healing sensor
@@ -166,6 +166,7 @@ a server over SSH, with the web app reached through an SSH tunnel
 | `add_ai_mask` | darktable's AI object mask: points on a subject, outlined into path shapes on a module (needs darktable built with AI, AI enabled) |
 | `add_mask`, `list_masks`, `remove_mask` | drawn shapes (circle, ellipse, gradient, path, brush stroke) on a module, placed on the photo as shown; `set_blending(raster_source=...)` reuses another module's mask |
 | `measure_photo` | values at points and in boxes, histograms and clipping of the rendered photo |
+| `zone_map` | the rendered photo reduced to Ansel Adams's eleven print values (zones 0-X, steps of 10 in Lab L), with the share of the photo in each zone, zones at points, and chosen zones marked in red (needs the `[dust]` extra) |
 | `ai_denoise`, `job_status`, `list_jobs`, `cancel_job` | darktable's AI raw denoise as a background job: a new DNG photo beside the original, in its group (needs darktable built with AI) |
 | `find_dust_spots`, `heal_dust_spots` | sensor dust: a map of dust recurring across the photo's film roll (read from the raw files, cached; small specks and large soft blobs), rated in this photo (raw files that are missing or unreadable are skipped and listed; with too few left the result says the map can't find dust); `this_photo=True` also finds dust in this photo alone, in darktable's render of the current edit (one-off spots, or faint ones a black and white red filter brings out; numbered from 101, with their own crop sheet, healed only when picked by id); heal circles in retouch as one history step, checked at 100% before and after. Needs `pip install 'darktable-api-mcp[dust]'` |
 | `retouch_spots`, `list_retouch_spots`, `edit_retouch_spot`, `remove_retouch_spots` | retouch circles that clone, heal, blur or fill, placed on the photo as shown; move, resize, change or delete them |
