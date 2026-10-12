@@ -2,11 +2,13 @@
 
 An [MCP](https://modelcontextprotocol.io) server that lets an AI assistant
 (any MCP client, e.g. Claude) browse a [darktable](https://www.darktable.org/)
-library and edit photos. All the work is done by **darktable-api**, a
-long-running headless darktable built from darktable's own code: it renders
-previews, applies module settings and writes the history to the library
-exactly as darktable does. No darktable window, Lua script or XMP editing is
-involved.
+library and edit photos. All the work is done by **darktable-api**, darktable's
+own code running as a long-lived headless engine: it renders previews,
+applies module settings and writes the history to the library exactly as
+darktable does. darktable's own window (built from the same fork) can serve
+the library instead, sharing the photo open in its darkroom live; a few
+tools need it (the color pickers and auto buttons, and switching
+darktable's darkroom to a photo). No Lua script or XMP editing is involved.
 
 **Experimental.** Use it on a copy of your library (the copy script below
 does that). Saving writes darktable's history in the engine's module
@@ -129,9 +131,9 @@ a server over SSH, with the web app reached through an SSH tunnel
 | `photo_sheet`, `tag_photos` | tagging by content: pages of thumbnails with each photo's id, date, camera, place and tags for the AI to look at, then each photo's own tags applied in one call |
 | `set_rating`, `set_color_label` | rate (0–5), reject, color labels, as darktable's lighttable |
 | `open_photo` | open a photo for editing (joins an edit already open in another app, unsaved changes included) |
-| `open_in_darkroom`, `get_collection` | switch darktable's darkroom to a photo; the photos darktable's lighttable shows, and the selection |
+| `open_in_darkroom`, `get_collection` | switch darktable's darkroom to a photo (needs darktable's window); the photos darktable's lighttable shows, and the selection |
 | `check_sensor_clipping` | real sensor clipping, from the raw file, per color, with each color's headroom (needs the `[dust]` extra) |
-| `open_darkroom_photo` | open the photo the user has open in darktable's darkroom (when darktable's window serves the library) |
+| `open_darkroom_photo` | open the photo the user has open in darktable's darkroom (needs darktable's window) |
 | `list_modules`, `get_module` | the photo's modules; a module's settings with values, defaults, ranges and dropdown values |
 | `set_module`, `enable_module` | change settings by name (checked, all or nothing), lists whole or by element (`grey[1]`), module on/off |
 | `list_presets`, `apply_preset` | a module's presets, applied as darktable's presets menu does (e.g. "monochrome \| luminance-based") |
@@ -152,9 +154,9 @@ a server over SSH, with the web app reached through an SSH tunnel
 | `retouch_spots`, `list_retouch_spots`, `edit_retouch_spot`, `remove_retouch_spots` | retouch circles that clone, heal, blur or fill, placed on the photo as shown; move, resize, change or delete them |
 | `list_styles`, `create_style`, `apply_style`, `delete_style` | darktable's styles: make one from a photo's edit, apply one to photos (e.g. one B&W look on a set), as the lighttable does |
 | `paste_edit` | one photo's edit, or some of its modules, onto other photos (append or overwrite), as darktable's copy and paste |
-| `list_pickers`, `use_picker` | a module's color pickers and auto buttons (exposure's picker, color calibration's white balance picker, AgX's auto tune levels, tone equalizer's wands, ...), used as clicking them in darktable: on the photo in darktable's darkroom, with darktable's window serving the library |
+| `list_pickers`, `use_picker` | a module's color pickers and auto buttons (exposure's picker, color calibration's white balance picker, AgX's auto tune levels, tone equalizer's wands, ...), used as clicking them in darktable: on the photo in darktable's darkroom (needs darktable's window) |
 | `render_preview` | darktable's rendering of the current, unsaved edit (image); `uncropped=True` shows the whole photo to choose a crop on; `zoom=1` a region at 100%; `history_step` an earlier step (before/after) |
-| `compare_before_after`, `mark_before` | before and after of the edit (both renders, for the AI), shown to the user as a before/after slider in the web app and, for the photo in darktable's darkroom, a snapshot in darktable's snapshots panel split against the edit; "before" is the step before the AI's first edit of the photo, or where `mark_before` put it |
+| `compare_before_after`, `mark_before` | before and after of the edit (both renders, for the AI), shown to the user as a before/after slider in the web app and, for the photo in darktable's darkroom, a snapshot in darktable's snapshots panel split against the edit (when darktable's window serves the library); "before" is the step before the AI's first edit of the photo, or where `mark_before` put it |
 | `propose_alternatives`, `apply_alternative`, `keep_alternative` | labeled alternatives (crops, B&W filters, looks: changes as calls of the editing tools) rendered without touching the edit, shown to the user as a strip in the web app; apply the one picked, or keep it as a duplicate photo with its version name set |
 | `save`, `discard_changes`, `start_over` | write the edit to the library; reopen as saved; delete the edit and apply darktable's defaults again (asks for `confirm`) |
 | `library_status`, `release_library`, `acquire_library`, `takeover_library` | hand the library to darktable's GUI and take it back; `takeover_library` asks a running darktable to quit the normal way (asks for `confirm`, never kills it) |
