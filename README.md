@@ -71,7 +71,7 @@ instructions for Fedora and others). Python 3.10 or later.
    10–20 minutes the first time, the same on both systems):
 
        cd ~/src/darktable
-       cmake -B build -G Ninja -DUSE_MCP=ON -DUSE_AI=ON
+       cmake -B build -G Ninja -DUSE_API=ON -DUSE_AI=ON
        cmake --build build --target darktable-api darktable
 
 3. **Install the MCP server and copy your library.** The copy is the
@@ -192,13 +192,13 @@ starts in about 3 s on the first call.
 
 1. **darktable-api**, from the `darktable-api` branch of the darktable fork:
    https://github.com/mmcc-xx/darktable/tree/darktable-api
-   (see `src/api/README.md` there). Build darktable with the MCP server
-   (on by default on this branch), which builds `darktable-api` alongside,
+   (see `src/api/README.md` there). Build darktable with the API enabled
+   (`-DUSE_API=ON`, off by default), which builds `darktable-api` alongside,
    and with AI for the AI mask and AI denoise tools:
 
        git clone -b darktable-api --recurse-submodules https://github.com/mmcc-xx/darktable.git
        cd darktable
-       cmake -B build -G Ninja -DUSE_MCP=ON -DUSE_AI=ON
+       cmake -B build -G Ninja -DUSE_API=ON -DUSE_AI=ON
        cmake --build build --target darktable-api darktable
 
    darktable's README lists the build dependencies (on macOS:
