@@ -10,6 +10,8 @@ the API as well instead, sharing the photo open in its darkroom live. A few
 tools require running darktable with the GUI (the color pickers and auto buttons, and switching
 darktable's darkroom to a photo), but most edits can be done headlessly. No Lua script or XMP editing is involved.
 
+[Demo Video](https://www.youtube.com/watch?v=VDfZbxvvniY)
+
 **What's included:**
 
 - **78 MCP tools** ([list](#tools)): browse the library, rate, label and tag
