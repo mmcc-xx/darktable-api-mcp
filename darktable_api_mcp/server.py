@@ -23,88 +23,30 @@ from .engine import EngineError, engine
 
 INSTRUCTIONS = """\
 Edits photos in a darktable library through darktable-api (a headless
-darktable). Typical flow: list_images -> open_photo(id) -> get_module /
-set_module (several times, checking render_preview) -> save. Edits stay in
-memory until save; discard_changes reopens the saved state; start_over
-applies darktable's defaults again. When the user names a photo by number
-("photo 36"), that is its library id: open_photo(36) or image_info(36)
-directly. list_images hides rejected photos unless rating="all".
+darktable). Flow: open_photo(id) -> get_module (setting names, ranges,
+dropdown values) -> set_module, checking render_preview -> save. Edits stay
+in memory until save; discard_changes reopens the saved state. "Photo 36"
+means library id 36. One photo is current at a time (the last open_photo).
 
-darktable is scene-referred: set exposure first (midtones of the subject),
-white balance in color calibration (channelmixerrgb), then the tone mapper
-(agx, or sigmoid/filmicrgb on older edits; never two), then tone equalizer
-(toneequal) and color balance rgb (colorbalancergb). Use get_module to learn a
-module's setting names, ranges and dropdown values before set_module.
-Orientation, straightening and cropping: get_geometry, rotate_photo,
-crop_photo (render_preview(uncropped=True) shows the whole photo to choose a
-crop on). export_photo writes a finished file with darktable's export.
-Presets: list_presets / apply_preset (e.g. denoise (profiled) presets; for
-black and white see below).
-render_preview(zoom=1) shows a region at 100% to judge noise, sharpness and
-dust.
-Local edits: get_blending / set_blending (blend mode, opacity, parametric
-ranges, e.g. noise reduction only in the shadows), add_mask / list_masks /
-remove_mask (drawn circle, ellipse, gradient, path, brush stroke), add_ai_mask (darktable's AI
-object mask: click points on a subject, it is outlined). measure_photo reads values,
-histogram and clipping of the rendered photo. zone_map shows the photo on the zone scale
-(Ansel Adams's print values 0-X) for black and white work.
-Instances: add_module_instance (e.g. a second color calibration for creative
-B&W, a second denoise pass), rename_module_instance, remove_module_instance.
-Black and white: add_module_instance("channelmixerrgb") (a new instance,
-not a copy) and apply_preset a "monochrome | ..." preset to it; keep the
-first instance, which does the white balance (the monochrome presets switch
-white balance off). Creative B&W: then move_module(it, after the tone
-mapper, e.g. "agx"). Curves:
-get_curve / set_curve (rgbcurve, tonecurve, colorzones, basecurve).
-duplicate_photo makes a version (e.g. a B&W one beside the color one).
-Before/after: when the user asks to see what you changed, use
-compare_before_after (it shows the comparison in the web app and in
-darktable's darkroom, and gives you both renders); mark_before starts a new
-"before" for a new request. render_preview(history_step=0) only shows you
-the original. Choices (crops, B&W filters, looks): propose_alternatives
-renders labeled versions without applying them and shows them to the user;
-apply_alternative / keep_alternative (as a duplicate) after the user picks.
-compress_history tidies the history (and saves).
-AI denoise: ai_denoise (darktable's neural restore on the raw: a new, cleaner
-DNG photo beside the original, in its group; edit that one). It runs as a
-background job: job_status / list_jobs / cancel_job.
-Sensor dust: find_dust_spots (maps dust that recurs across the photo's film
-roll, rates it in this photo; this_photo=True also finds dust in this photo
-alone, e.g. brought out by a black and white red filter), heal_dust_spots
-(heal circles in retouch, one history step, checked at 100% before/after).
-Use these tools to measure and find things in photos (also measure_photo,
-render_preview(zoom=...)); don't write analysis scripts or install
-packages. Other retouching:
-retouch_spots (clone, heal, blur, fill circles), list_retouch_spots,
-edit_retouch_spot, remove_retouch_spots.
-Library: get_collection (the photos the user's darktable shows),
-open_in_darkroom (switch darktable's darkroom to a photo), image_info (with
-camera data), check_sensor_clipping (from the raw: real sensor clipping vs
-highlights only bright in the render), get_photo_metadata, list_tags, set_tags, set_metadata (title,
-description, ...), set_location. make_thumbnails renders thumbnails in bulk
-(a film roll, the whole library) into darktable's thumbnail cache.
-Tagging by content: list_tags (reuse the library's vocabulary), then
-photo_sheet pages (thumbnails with id, date, place, current tags), then
-tag_photos for each page.
-Styles and copy/paste: list_styles, create_style, apply_style (e.g. one B&W
-look on a set of photos), delete_style, paste_edit (one photo's edit, or some
-of its modules, onto others). These save the photos they change.
-Pickers and auto buttons (exposure's picker, color calibration's white
-balance picker, AgX's auto tune levels, tone equalizer's wands, ...):
-list_pickers / use_picker, on the photo in darktable's darkroom only (with
-darktable's window serving the library).
+Scene-referred order: exposure (subject midtones), white balance in color
+calibration (channelmixerrgb), one tone mapper (agx; sigmoid/filmicrgb on
+older edits; never two), then toneequal and colorbalancergb.
+Black and white: add_module_instance("channelmixerrgb") (new, not a copy),
+apply_preset a "monochrome | ..." preset to it, keep the first instance for
+white balance; for creative B&W move_module it after the tone mapper.
+When the user asks what you changed, use compare_before_after (mark_before
+starts a new "before"). For choices (crops, filters, looks) use
+propose_alternatives. Measure with measure_photo / render_preview(zoom=...);
+don't write analysis scripts or install packages.
 
-The engine is shared: the user may be looking at or editing the same photo
-in a web app at the same time. open_photo joins an edit already open there,
-including its unsaved changes; changes made here show up for the user right
-away, and save saves the photo's whole edit (theirs too). darktable's own
-window may be serving the library: then the photo in its darkroom is the
-one the user is editing there (library_status: darkroom_imgid;
-open_darkroom_photo opens it), and your changes move its sliders. When the
-user talks about "this photo" or "the photo I have open", that's usually it. Tell the
-user what you are doing. One photo is "current" for these tools at a time (the last
-open_photo). While the library is released to darktable's GUI, only
-library_status, acquire_library and takeover_library work."""
+The engine is shared with the user's web app and darktable's window:
+open_photo joins an edit already open there (unsaved changes included),
+your changes show up live, and save saves the whole edit. If darktable's
+window serves the library, its darkroom photo (library_status:
+darkroom_imgid; open_darkroom_photo) is usually "this photo"; pickers
+(use_picker) work only on it. While the library is released to darktable's
+GUI, only library_status, acquire_library and takeover_library work. Tell
+the user what you are doing."""
 
 mcp = FastMCP("darktable-api", instructions=INSTRUCTIONS, log_level="WARNING")
 
