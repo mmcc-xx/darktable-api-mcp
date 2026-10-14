@@ -67,6 +67,9 @@ instructions for Fedora and others). Python 3.10 or later.
        mkdir -p ~/src && cd ~/src
        git clone -b darktable-api --recurse-submodules https://github.com/mmcc-xx/darktable.git
 
+   For darktable 5.6, clone `-b darktable-api-5.6` instead (see
+   Requirements).
+
 2. **Build the engine** (darktable-api and a darktable from the same fork;
    10–20 minutes the first time, the same on both systems):
 
@@ -195,6 +198,14 @@ starts in about 3 s on the first call.
    (see `src/api/README.md` there). Build darktable with the API enabled
    (`-DUSE_API=ON`, off by default), which builds `darktable-api` alongside,
    and with AI for the AI mask and AI denoise tools:
+
+   Which branch: the one matching the darktable you edit the library with
+   (a newer darktable writes module versions an older one can't open):
+
+   | Your darktable | Branch |
+   |---|---|
+   | 5.6.x (5.6.2 on) | `darktable-api-5.6` |
+   | built from master | `darktable-api` |
 
        git clone -b darktable-api --recurse-submodules https://github.com/mmcc-xx/darktable.git
        cd darktable
