@@ -38,6 +38,9 @@ When the user asks what you changed, use compare_before_after (mark_before
 starts a new "before"). For choices (crops, filters, looks) use
 propose_alternatives. Measure with measure_photo / render_preview(zoom=...);
 don't write analysis scripts or install packages.
+Removing objects: ai_fill (an AI model fills a drawn shape, or an
+add_ai_mask outline via like_mask_of, from its surroundings; a composite
+instance, non-destructive). Small spots: retouch_spots.
 
 The engine is shared with the user's web app and darktable's window:
 open_photo joins an edit already open there (unsaved changes included),
@@ -1299,32 +1302,12 @@ async def _photo_to_raw(points: list[list[float]]) -> tuple[list[list[float]], i
     return r["points"], r["raw_width"], r["raw_height"]
 
 
-@mcp.tool()
-async def add_mask(operation: str, shape: str, x: float | None = None, y: float | None = None,
-                   radius: float = 0.1, radius_y: float | None = None, rotation: float = 0.0,
-                   feather: float = 0.05, compression: float = 0.5, points: list[list[float]] | None = None,
-                   width: float = 0.03, hardness: float = 0.5, density: float = 1.0,
-                   combine: str = "union", inverted: bool = False, instance: int = 0) -> dict:
-    """Draw a mask shape on a module, so it only acts there (one history
-    step; the module's drawn mask is switched on).
-
-    Positions and sizes are on the photo as shown: x, y fractions 0-1 of the
-    photo; radius and feather fractions of the photo's shorter side.
-      shape "circle": x, y, radius, feather.
-      shape "ellipse": x, y, radius (horizontal), radius_y (vertical),
-        rotation (degrees), feather.
-      shape "gradient": a line through x, y at rotation (degrees, 0 =
-        horizontal line: the module acts on one side, fading across it);
-        compression 0-1 (how wide the fade is).
-      shape "path": a closed outline through points [[x, y], ...] (3 or
-        more), smoothed as darktable's path tool draws it (corners round
-        off: add points close to a corner to keep it); feather. Points
-        outside the photo snap to its edge.
-      shape "brush": a stroke along points (2 or more), width (half the
-        stroke's thickness), hardness and density 0-1.
-    combine: how it joins the module's earlier shapes (union, intersection,
-    difference, exclusion); inverted: the module acts outside it."""
-    await _require("mask_add", "coords")
+async def _shape_on_raw(shape: str, x: float | None, y: float | None, radius: float,
+                        radius_y: float | None, rotation: float, feather: float, compression: float,
+                        points: list[list[float]] | None, width: float, hardness: float,
+                        density: float) -> dict:
+    """add_mask's arguments (positions and sizes on the photo as shown) as
+    the engine's shape dict in raw space."""
     if shape in ("path", "brush"):
         await _require("mask_add.path")
         brush = shape == "brush"
@@ -1339,8 +1322,7 @@ async def add_mask(operation: str, shape: str, x: float | None = None, y: float 
             sh.update(width=size, hardness=hardness, density=density)
         else:
             sh["border"] = size
-        return await _edit(None, "mask_add", operation=operation, instance=instance, shape=sh,
-                           combine=combine, inverted=inverted)
+        return sh
     if x is None or y is None:
         raise ToolError(f"shape {shape}: needs x and y")
     import math
@@ -1370,6 +1352,37 @@ async def add_mask(operation: str, shape: str, x: float | None = None, y: float 
               "compression": max(0.0, min(compression, 1.0))}
     else:
         raise ToolError("shape: circle, ellipse, gradient, path or brush")
+    return sh
+
+
+@mcp.tool()
+async def add_mask(operation: str, shape: str, x: float | None = None, y: float | None = None,
+                   radius: float = 0.1, radius_y: float | None = None, rotation: float = 0.0,
+                   feather: float = 0.05, compression: float = 0.5, points: list[list[float]] | None = None,
+                   width: float = 0.03, hardness: float = 0.5, density: float = 1.0,
+                   combine: str = "union", inverted: bool = False, instance: int = 0) -> dict:
+    """Draw a mask shape on a module, so it only acts there (one history
+    step; the module's drawn mask is switched on).
+
+    Positions and sizes are on the photo as shown: x, y fractions 0-1 of the
+    photo; radius and feather fractions of the photo's shorter side.
+      shape "circle": x, y, radius, feather.
+      shape "ellipse": x, y, radius (horizontal), radius_y (vertical),
+        rotation (degrees), feather.
+      shape "gradient": a line through x, y at rotation (degrees, 0 =
+        horizontal line: the module acts on one side, fading across it);
+        compression 0-1 (how wide the fade is).
+      shape "path": a closed outline through points [[x, y], ...] (3 or
+        more), smoothed as darktable's path tool draws it (corners round
+        off: add points close to a corner to keep it); feather. Points
+        outside the photo snap to its edge.
+      shape "brush": a stroke along points (2 or more), width (half the
+        stroke's thickness), hardness and density 0-1.
+    combine: how it joins the module's earlier shapes (union, intersection,
+    difference, exclusion); inverted: the module acts outside it."""
+    await _require("mask_add", "coords")
+    sh = await _shape_on_raw(shape, x, y, radius, radius_y, rotation, feather, compression, points,
+                             width, hardness, density)
     return await _edit(None, "mask_add", operation=operation, instance=instance, shape=sh,
                        combine=combine, inverted=inverted)
 
@@ -1465,6 +1478,82 @@ async def remove_mask(operation: str, formid: int, instance: int = 0) -> dict:
     history step."""
     await _require("mask_remove")
     return await _edit(None, "mask_remove", operation=operation, formid=formid, instance=instance)
+
+
+def _member_from_listed(s: dict) -> dict:
+    """A mask_list shape as a mask_add group member: its geometry (raw
+    space) with combine, inverted, opacity and name; formid and active are
+    dropped (a group's members are nested the same way)."""
+    m = {k: v for k, v in s.items() if k not in ("formid", "active", "members")}
+    if s.get("members"):
+        m["members"] = [_member_from_listed(c) for c in s["members"] if c.get("active", True)]
+    return m
+
+
+@mcp.tool()
+async def ai_fill(shape: str = "circle", x: float | None = None, y: float | None = None,
+                  radius: float = 0.05, radius_y: float | None = None, rotation: float = 0.0,
+                  feather: float = 0.01, points: list[list[float]] | None = None, width: float = 0.03,
+                  hardness: float = 0.5, density: float = 1.0, like_mask_of: str | None = None,
+                  like_mask_instance: int = 0, context: float = 0.5, name: str = "fill") -> dict:
+    """Remove an object or blemish: the area inside a shape is filled by an
+    AI inpainting model (LaMa) from its surroundings. Non-destructive: a
+    new "composite" module instance called `name` shows the fill, masked by
+    the shape; switch it off (enable_module) or delete it
+    (remove_module_instance) to undo. Its mask can be feathered with
+    set_blending and edited like any mask (add_mask, list_masks,
+    remove_mask). One call, about a second.
+
+    The shape is drawn as add_mask does: positions as fractions 0-1 of the
+    photo as shown, radius and feather fractions of its shorter side.
+      shape "circle": x, y, radius, feather.
+      shape "ellipse": x, y, radius, radius_y, rotation (degrees), feather.
+      shape "path": a closed outline through points [[x, y], ...] (3 or
+        more), feather.
+      shape "brush": a stroke along points, width, hardness, density.
+    Outline the object generously (a few pixels around it) and feather a
+    little (the default is 0.01).
+
+    like_mask_of: a module's operation name (e.g. one where add_ai_mask
+    outlined the object): fill exactly the shapes of that module's mask
+    (instance like_mask_instance); the shape, x, y and radius arguments are
+    then ignored. Remove that helper module's mask afterwards (remove_mask)
+    if it was only made for this.
+
+    context 0.25-4 (default 0.5): how much of the surroundings the model
+    sees, in shape sizes. Smaller keeps texture sharper; larger (e.g. 1.0)
+    suits big uniform areas such as sky. propose_alternatives cannot run
+    fills: to choose, make a second fill with a different context and
+    compare with render_preview(zoom=1), then remove the worse instance with
+    remove_module_instance. Check the result at 100% with
+    render_preview(zoom=1) before and after.
+
+    The fill is written as a float TIFF beside the photo (in a
+    darktable_fills folder) and imported into the photo's group. Needs the
+    inpaint model installed (inpaint-lama, or inpaint-migan, in darktable's
+    models folder) and AI enabled.
+
+    Size: the model works at 512 x 512 on the shape plus its surroundings, so
+    objects up to about a tenth of the frame fill well at 100%; bigger ones
+    (a main subject) come out soft and blocky up close: say so to the user
+    and check at 100% before calling it done. Returns the instance, name, imgid of the patch photo, file,
+    model, patch box and process_ms."""
+    await _require("ai_fill", "coords")
+    if shape == "gradient":
+        raise ToolError("a gradient cannot be filled: use circle, ellipse, path or brush")
+    context = max(0.25, min(float(context), 4.0))
+    if like_mask_of:
+        await _require("mask_list")
+        r = await _edit(None, "mask_list", operation=like_mask_of, instance=like_mask_instance)
+        members = [_member_from_listed(s) for s in r.get("shapes", [])
+                   if s.get("active", True) and s.get("type") != "other"]
+        if not members:
+            raise ToolError(f"module '{like_mask_of}' (instance {like_mask_instance}) has no mask shapes")
+        sh: dict[str, Any] = {"type": "group", "members": members}
+    else:
+        sh = await _shape_on_raw(shape, x, y, radius, radius_y, rotation, feather, 0.5, points,
+                                 width, hardness, density)
+    return await _edit(None, "ai_fill", shape=sh, context=context, name=name)
 
 
 # ── retouch ──────────────────────────────────────────────────────────────────
