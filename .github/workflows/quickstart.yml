@@ -1,0 +1,52 @@
+# Runs the README's Quick start on clean machines, for both branches of the
+# darktable fork: build dependencies, clone and build, MCP server, library
+# copy, web app (tests/readme_quickstart.py).
+name: README quick start
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 6 * * 1"        # weekly, after the fork's weekly merge of darktable master
+  push:
+    branches: [main]
+    paths: [README.md, tests/readme_quickstart.py, .github/workflows/quickstart.yml]
+
+jobs:
+  ubuntu:
+    runs-on: ubuntu-24.04
+    container: ubuntu:24.04    # a clean Ubuntu, not the runner's preinstalled one
+    timeout-minutes: 150
+    strategy:
+      fail-fast: false
+      matrix:
+        branch: [darktable-api-5.6, darktable-api]
+    steps:
+      # what a desktop Ubuntu has before the README starts (and curl for the test)
+      - run: apt-get update && apt-get install -y sudo git python3 ca-certificates curl
+      - uses: actions/checkout@v4
+      - run: python3 tests/readme_quickstart.py --platform ubuntu --branch ${{ matrix.branch }}
+               --home "$RUNNER_TEMP/home" --mcp-src "$GITHUB_WORKSPACE"
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ubuntu-${{ matrix.branch }}-logs
+          path: ${{ runner.temp }}/home/*.log
+          if-no-files-found: ignore
+
+  macos:
+    runs-on: macos-14          # Apple Silicon
+    timeout-minutes: 150
+    strategy:
+      fail-fast: false
+      matrix:
+        branch: [darktable-api-5.6, darktable-api]
+    steps:
+      - uses: actions/checkout@v4
+      - run: python3 tests/readme_quickstart.py --platform macos --branch ${{ matrix.branch }}
+               --home "$RUNNER_TEMP/home" --mcp-src "$GITHUB_WORKSPACE"
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-${{ matrix.branch }}-logs
+          path: ${{ runner.temp }}/home/*.log
+          if-no-files-found: ignore

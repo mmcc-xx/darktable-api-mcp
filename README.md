@@ -42,6 +42,29 @@ This has been tested on macOS (Apple Silicon) and Ubuntu 24.04; other Linux
 distributions need the equivalent packages (darktable's README links build
 instructions for Fedora and others). Python 3.10 or later.
 
+### Pick a branch
+
+Pick the branch of the fork matching the darktable you edit your library
+with (a newer darktable writes module versions an older one can't open):
+
+| Your darktable | Branch | What it is |
+|---|---|---|
+| the latest release, 5.6.x (5.6.2 on) | `darktable-api-5.6` | darktable's 5.6 release with the API; darktable's point releases are merged in as they come out. Most people want this one |
+| built from master | `darktable-api` (the fork's default branch) | darktable's development version with the API; darktable master is merged in weekly once the tests pass. Its edits use module versions darktable 5.6 can't open. Has the newest tools first (`ai_fill`, the AI fill in `heal_dust_spots`) |
+
+When darktable releases a new version (5.8, ...), a `darktable-api-5.8`
+branch starts from it and the previous release branch is frozen (tagged
+`api-dt<version>-final`, no more changes): pick the newest
+`darktable-api-<version>`.
+
+Set it in the shell you run the steps below in:
+
+    BRANCH=darktable-api-5.6     # latest release (for master: BRANCH=darktable-api)
+
+Everything else is the same for both branches.
+
+### Steps
+
 1. **Install the build dependencies.**
 
    macOS:
@@ -50,7 +73,7 @@ instructions for Fedora and others). Python 3.10 or later.
 
        xcode-select --install
        mkdir -p ~/src && cd ~/src
-       git clone -b darktable-api-5.6 --recurse-submodules https://github.com/mmcc-xx/darktable.git
+       git clone -b $BRANCH --recurse-submodules https://github.com/mmcc-xx/darktable.git
        brew bundle --file=darktable/.ci/Brewfile
 
    Ubuntu 24.04:
@@ -65,18 +88,14 @@ instructions for Fedora and others). Python 3.10 or later.
          libopenjp2-7-dev libosmesa6-dev ocl-icd-opencl-dev libsdl2-dev \
          libcups2-dev libpotrace-dev libarchive-dev
        mkdir -p ~/src && cd ~/src
-       git clone -b darktable-api-5.6 --recurse-submodules https://github.com/mmcc-xx/darktable.git
-
-   `darktable-api-5.6` is darktable 5.6 with the API: its edits open in the
-   darktable 5.6 you already use. To follow darktable's development
-   version instead, clone `-b darktable-api` (see [Requirements](#requirements)).
+       git clone -b $BRANCH --recurse-submodules https://github.com/mmcc-xx/darktable.git
 
 2. **Build the engine** (darktable-api and a darktable from the same fork;
    10–20 minutes the first time, the same on both systems):
 
        cd ~/src/darktable
        cmake -B build -G Ninja -DUSE_API=ON -DUSE_AI=ON
-       cmake --build build --target darktable-api darktable
+       cmake --build build
 
 3. **Install the MCP server and copy your library.** The copy is the
    library everything below works on; your own library and XMP files are
@@ -205,22 +224,13 @@ starts in about 3 s on the first call.
    (`-DUSE_API=ON`, off by default), which builds `darktable-api` alongside,
    and with AI for the AI mask and AI denoise tools:
 
-   Which branch: the one matching the darktable you edit the library with
-   (a newer darktable writes module versions an older one can't open):
+   Which branch: see [Pick a branch](#pick-a-branch)
+   (`darktable-api-5.6` for the latest release, `darktable-api` for master).
 
-   | Your darktable | Branch | What it is |
-   |---|---|---|
-   | 5.6.x (5.6.2 on) | `darktable-api-5.6` | darktable's 5.6 release with the API; darktable's point releases are merged in as they come out. Most people want this one |
-   | built from master | `darktable-api` (the fork's default branch) | darktable's development version with the API; darktable master is merged in weekly once the tests pass. Its edits use module versions darktable 5.6 can't open |
-
-   When darktable releases a new version (5.8, ...), a `darktable-api-5.8`
-   branch starts from it and the previous release branch is frozen (tagged
-   `api-dt<version>-final`, no more changes).
-
-       git clone -b darktable-api-5.6 --recurse-submodules https://github.com/mmcc-xx/darktable.git
+       git clone -b darktable-api-5.6 --recurse-submodules https://github.com/mmcc-xx/darktable.git    # or -b darktable-api
        cd darktable
        cmake -B build -G Ninja -DUSE_API=ON -DUSE_AI=ON
-       cmake --build build --target darktable-api darktable
+       cmake --build build
 
    darktable's README lists the build dependencies (on macOS:
    `brew bundle --file=.ci/Brewfile`; on Ubuntu 24.04 also `libpotrace-dev`
@@ -239,7 +249,7 @@ merges, never by rewriting history), so a pull updates a clone:
 
     cd ~/src/darktable
     git pull --recurse-submodules
-    cmake --build build --target darktable-api darktable
+    cmake --build build
 
 Then reconnect the MCP server (or restart the web app). A clone of
 `darktable-api` made before 2026-10-13 (the branch was rebased until then)
