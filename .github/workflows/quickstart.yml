@@ -34,7 +34,7 @@ jobs:
           if-no-files-found: ignore
 
   macos:
-    runs-on: macos-14          # Apple Silicon
+    runs-on: macos-latest      # Apple Silicon; Homebrew has no bottles for macOS 14 any more
     timeout-minutes: 150
     strategy:
       fail-fast: false
