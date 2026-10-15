@@ -685,8 +685,12 @@ async def rotate_photo(degrees: int = 0, angle: float | None = None, mirror: str
              crop turns with the photo.
     angle: straighten to this absolute angle in degrees (rotate and
            perspective module, -180..180; small values like -3..3 level a
-           horizon). Positive turns counter-clockwise. The automatic crop
-           is refitted so no blank corners show.
+           horizon). Positive turns the photo counter-clockwise (its top
+           moves left), negative clockwise (its top moves right). The
+           automatic crop is refitted so no blank corners show; the
+           frame gets smaller, and a crop module crop keeps its fractions
+           of that new frame, so its framing shifts and tightens: straighten
+           before cropping, or check the framing and crop again after.
     mirror: "horizontal" (left-right) or "vertical".
     autocrop: rotate and perspective's automatic crop: "ASHIFT_CROP_LARGEST"
               (largest area, default), "ASHIFT_CROP_ASPECT" (keep the
@@ -1234,14 +1238,22 @@ async def set_blending(operation: str, values: dict[str, Any], instance: int = 0
     inverted"), feathering_guide, and parametric: ranges per channel and
     direction, in the darkroom's units (percent for gray/RGB/L/chroma,
     -128..128 for Lab a/b, degrees for hue), as four values [low end, low
-    full, high full, high end], e.g. shadows only on a scene-referred module:
-    {"parametric": {"g_in": {"range": [0, 0, 18, 40]}}}; "inverted": true
-    flips a range; null switches a channel off. Ranges turn the parametric
-    mask on. raster_source {"operation", "instance"} uses another module's
+    full, high full, high end]; "inverted": true flips a range; null
+    switches a channel off. Ranges turn the parametric mask on.
+    Gray (g) and R/G/B on scene-referred modules are linear: 18 is middle
+    gray and each EV down halves it (9 = -1 EV, 4.5 = -2 EV, 2 = -3 EV).
+    Dark shadows are a few percent, not 20-40: e.g. the darkest tones only
+    {"parametric": {"g_in": {"range": [0, 0, 2, 6]}}}, below middle gray
+    [0, 0, 6, 18]. The values are what reaches this module (after exposure
+    and earlier modules), not what measure_photo reads from the rendered
+    photo, so check a range's effect with render_preview(zoom=...) and
+    narrow it if the change spreads.
+    raster_source {"operation", "instance"} uses another module's
     mask (one earlier in the pipe that has a drawn or parametric mask) as
     this one's, as the raster mask menu does; null removes it;
-    raster_inverted flips it. Example: denoise only the shadows:
-    set_blending("denoiseprofile", {"parametric": {"g_in": {"range": [0, 0, 10, 30]}}})."""
+    raster_inverted flips it. Example: denoise only the shadows (-1.5 EV
+    and below, fading in from -0.5 EV):
+    set_blending("denoiseprofile", {"parametric": {"g_in": {"range": [0, 0, 6, 13]}}})."""
     await _require("blend_set")
     return await _edit(None, "blend_set", operation=operation, values=values, instance=instance)
 
@@ -1361,18 +1373,53 @@ async def add_ai_mask(operation: str, include: list[list[float]], exclude: list[
 @mcp.tool()
 async def list_masks(operation: str, instance: int = 0) -> dict:
     """The drawn shapes on a module's mask: formid (for remove_mask), name,
-    type, combine, inverted, and where it is on the photo (x, y fractions)."""
+    type, combine, inverted, and where it is on the photo as add_mask takes
+    it: on_photo (x, y fractions of the photo as shown); circles and
+    ellipses also radius (radius_y, rotation for an ellipse) and feather,
+    fractions of the photo's shorter side, so a shape can be redrawn
+    bigger or smaller with add_mask."""
     await _require("mask_list", "coords")
+    import math
     r = await _edit(None, "mask_list", operation=operation, instance=instance)
-    pts = [[s["x"], s["y"]] for s in r["shapes"] if "x" in s]
-    if pts:
-        img = (await _edit(None, "coords", points=pts, **{"from": "raw", "to": "image"}))["points"]
-        it = iter(img)
-        for s in r["shapes"]:
-            if "x" in s:
-                u, v = next(it)
-                s["on_photo"] = [round(u, 4), round(v, 4)]
-                del s["x"], s["y"]
+    shapes = [s for s in r["shapes"] if "x" in s]
+    if not shapes:
+        return r
+    # each center, and for circles and ellipses points along its radii and
+    # border in raw space (the inverse of add_mask), mapped to the photo
+    raw_size = await _edit(None, "coords", points=[[0.5, 0.5]], **{"from": "raw", "to": "image"})
+    rw, rh = raw_size["raw_width"], raw_size["raw_height"]
+    rshort = min(rw, rh)
+    probes: list[list[float]] = []
+    for s in shapes:
+        x, y = s["x"], s["y"]
+        probes.append([x, y])
+        if s["type"] in ("circle", "ellipse"):
+            a = math.radians(s.get("rotation", 0.0))
+            ra, rb = (s["r"], s["r"]) if s["type"] == "circle" else (s["ra"], s["rb"])
+            for length, (cx, cy) in ((ra, (math.cos(a), math.sin(a))), (rb, (-math.sin(a), math.cos(a))),
+                                     (s.get("border", 0.0), (math.cos(a), math.sin(a)))):
+                probes.append([x + length * rshort * cx / rw, y + length * rshort * cy / rh])
+    img = (await _edit(None, "coords", points=probes, **{"from": "raw", "to": "image"}))["points"]
+    g = await _edit(None, "geometry_get")
+    W, H = g["width"], g["height"]
+    short = min(W, H)
+    def dist(p, q):
+        return math.hypot((q[0] - p[0]) * W, (q[1] - p[1]) * H) / short
+    it = iter(img)
+    for s in shapes:
+        c = next(it)
+        s["on_photo"] = [round(c[0], 4), round(c[1], 4)]
+        del s["x"], s["y"]
+        if s["type"] in ("circle", "ellipse"):
+            pa, pb, pf = next(it), next(it), next(it)
+            # sizes as add_mask takes them, replacing the raw-space ones
+            for k in ("r", "ra", "rb", "border"):
+                s.pop(k, None)
+            s["radius"] = round(dist(c, pa), 4)
+            if s["type"] == "ellipse":
+                s["radius_y"] = round(dist(c, pb), 4)
+                s["rotation"] = round(math.degrees(math.atan2((pa[1] - c[1]) * H, (pa[0] - c[0]) * W)), 1)
+            s["feather"] = round(dist(c, pf), 4)
     return r
 
 

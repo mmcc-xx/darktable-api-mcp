@@ -84,8 +84,12 @@ back to a path.
 
 **Parametric ranges** (`set_blending`): four values [low end, low full,
 high full, high end] per channel, in the darkroom's units (percent for
-brightness `g`). Examples on a scene-referred module:
-- shadows only: `{"g_in": {"range": [0, 0, 10, 30]}}`
+brightness `g`). On a scene-referred module `g` is linear: 18 is middle
+gray and each EV down halves it (9 = -1 EV, 2 = -3 EV), so dark tones are
+a few percent. The values are what reaches the module, not what
+measure_photo reads from the render. Examples on a scene-referred module:
+- shadows only: `{"g_in": {"range": [0, 0, 6, 13]}}`
+- the darkest tones only (gaps, deep shadow): `{"g_in": {"range": [0, 0, 2, 6]}}`
 - highlights only: `{"g_in": {"range": [40, 70, 100, 100]}}`
 - `"inverted": true` flips a range.
 - blue sky by hue: `{"hz_in": {"range": [205, 225, 300, 320]}}` (hue in

@@ -152,7 +152,8 @@ contrast. Use it for sky vs. foreground, backlit faces, deep shadows.
 - **Noise** (high ISO, lifted shadows): denoise (profiled)
   (`denoiseprofile`), strength around camera default, lower (~0.7) if it
   looks plastic; shadows only via
-  `set_blending("denoiseprofile", {"parametric": {"g_in": {"range": [0, 0, 10, 30]}}})`.
+  `set_blending("denoiseprofile", {"parametric": {"g_in": {"range": [0, 0, 6, 13]}}})`
+  (gray is linear: 18 = middle gray, 9 = -1 EV).
   Or `ai_denoise` for a cleaner raw (makes a new photo). Denoise before
   sharpening.
 

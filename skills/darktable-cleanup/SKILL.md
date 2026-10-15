@@ -116,7 +116,7 @@ for the camera and ISO.
   `apply_preset("denoiseprofile", "wavelets: chroma only")`.
 - Noise only in the shadows: keep the highlights crisp with a parametric
   mask: `set_blending("denoiseprofile", {"parametric": {"g_in": {"range":
-  [0, 0, 10, 30]}}})`.
+  [0, 0, 6, 13]}}})` (gray is linear: 18 = middle gray, 6 = about -1.5 EV).
 - Severe noise: mode "non-local means auto" is smoother but slower.
 - A second instance (`add_module_instance`) can do chroma only while the
   first does luminance at a lower strength.
