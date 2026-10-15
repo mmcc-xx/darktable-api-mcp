@@ -42,6 +42,16 @@ This has been tested on macOS (Apple Silicon) and Ubuntu 24.04; other Linux
 distributions need the equivalent packages (darktable's README links build
 instructions for Fedora and others). Python 3.10 or later.
 
+**Which macOS:** an Apple Silicon Mac on a macOS version Homebrew still
+makes packages for: the latest macOS and the two before it (in October
+2026: macOS 27, 26 and 15; see Homebrew's
+[support tiers](https://docs.brew.sh/Support-Tiers)). On an older one,
+macOS 14 included, Homebrew has no packages for darktable's dependencies
+and `brew bundle` has to build about 20 of them from source, which is slow
+and may fail; update macOS first. Intel Macs are untested (Homebrew
+supports them less: its packages may be missing there too). Tested on
+macOS 27 and 26 (the latter on GitHub's `macos-latest` runner).
+
 ### Pick a branch
 
 Pick the branch of the fork matching the darktable you edit your library
@@ -336,7 +346,7 @@ the user's changes in darktable reach the AI. When darktable quits, the
 server goes back to the engine. (`release_library` / `acquire_library` are for
 a darktable started without `--api-socket`.)
 
-Tested on macOS (Apple M1) and Linux (Ubuntu 24.04): the engine's test
+Tested on macOS 27 (Apple M1) and Linux (Ubuntu 24.04): the engine's test
 suite, headless and with darktable's window, and Claude Code sessions with
 the skills. On Linux, `takeover_library` uses darktable's D-Bus `Quit`
 method (untested).
