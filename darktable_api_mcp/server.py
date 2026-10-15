@@ -585,7 +585,7 @@ async def duplicate_photo(image_id: int | None = None, virgin: bool = False, sav
     try:
         return await engine.call("image_duplicate", imgid=image_id, virgin=virgin, save=save_first)
     except EngineError as exc:
-        if "unsaved" in str(exc):
+        if exc.is_("unsaved_changes", "unsaved"):
             raise ToolError("the photo has unsaved changes and the duplicate gets the saved edit: save, or "
                             "pass save_first=True (both save the whole shared edit: ask the user)")
         raise _err(exc)
@@ -1048,7 +1048,7 @@ async def export_photo(image_id: int | None = None, format: str | None = None, s
         if not await engine.supports("export.background"):
             return await engine.call("export", **params)
     except EngineError as exc:
-        if "unsaved" in str(exc):
+        if exc.is_("unsaved_changes", "unsaved"):
             raise ToolError("the photo has unsaved changes and export uses the saved edit: save, or pass "
                             "save_first=True (both save the whole shared edit: ask the user)")
         raise _err(exc)

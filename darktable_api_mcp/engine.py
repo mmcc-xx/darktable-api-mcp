@@ -72,7 +72,28 @@ SOCKET = _socket_path()
 
 
 class EngineError(RuntimeError):
-    pass
+    """An error from the server, or from talking to it. Servers with the
+    errors.codes capability give a JSON-RPC code and error.data: name
+    ("not_found", "invalid_params", "not_open", "busy", "unsaved_changes",
+    ...), retry (trying the same request later can work) and param (the
+    parameter concerned); older ones give only the message."""
+
+    def __init__(self, message: str, code: int | None = None, data: dict | None = None):
+        super().__init__(message)
+        data = data or {}
+        self.code = code
+        self.name: str | None = data.get("name")
+        self.retry: bool = bool(data.get("retry"))
+        self.param: str | None = data.get("param")
+
+    def is_(self, name: str, text: str | None = None) -> bool:
+        """The error's name, or for servers without codes, text in its message."""
+        return self.name == name if self.name else bool(text) and text in str(self)
+
+
+# "busy" errors (a job, a dialog or another client in the way) are retried
+# after these pauses before giving up
+BUSY_RETRY_S = (0.5, 1.0, 2.0)
 
 
 class Engine:
@@ -192,6 +213,17 @@ class Engine:
         self._writer = None
 
     async def _call(self, method: str, **params) -> dict:
+        """Send one request (the caller holds the lock), again after a pause
+        while the server says it is busy: it didn't do anything then."""
+        for pause in (*BUSY_RETRY_S, None):
+            try:
+                return await self._call_once(method, **params)
+            except EngineError as exc:
+                if exc.name != "busy" or pause is None:
+                    raise
+            await asyncio.sleep(pause)
+
+    async def _call_once(self, method: str, **params) -> dict:
         """Send one request; the caller holds the lock. A connection found
         dead while sending (the server went away: darktable's window quit, an
         engine handed over) is replaced and the request sent once more; it
@@ -220,7 +252,9 @@ class Engine:
                 await self.stop()
                 raise EngineError(f"the engine stopped responding ({type(exc).__name__})") from exc
         if "error" in msg:
-            raise EngineError(msg["error"].get("message", "engine error"))
+            e = msg["error"]
+            raise EngineError(e.get("message", "engine error"), e.get("code"),
+                              e.get("data") if isinstance(e.get("data"), dict) else None)
         return msg.get("result") or {}
 
     # ── requests ────────────────────────────────────────────────────────────
@@ -248,7 +282,7 @@ class Engine:
         try:
             return await self._call(method, imgid=image_id, **params)
         except EngineError as exc:
-            if "is not open" not in str(exc):
+            if not exc.is_("not_open", "is not open"):
                 raise
         await self._call("session_open", imgid=image_id)
         return await self._call(method, imgid=image_id, **params)

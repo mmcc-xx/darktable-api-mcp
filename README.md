@@ -186,6 +186,10 @@ a server over SSH, with the web app reached through an SSH tunnel
 
 Edits stay in memory until `save`. Errors come back as MCP tool errors with
 darktable's message, e.g. `'exposure': 99 is outside -18..18`.
+The engine also sends an error code and name (`not_found`,
+`invalid_params`, `busy`, `unsaved_changes`, ...; see its `src/api/README.md`):
+the server retries `busy` errors a few times (0.5, 1 and 2 s apart) and
+reopens a photo the engine had closed (`not_open`).
 
 Measured on an Apple M1 (CPU only) with a 20 MP raw: `render_preview` after a
 change 0.15–0.4 s at 1200 px; browsing calls a few milliseconds; the engine
