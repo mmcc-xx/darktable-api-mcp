@@ -176,6 +176,42 @@ async def make_thumbnails(image_ids: list[int] | None = None, film_roll_id: int 
 
 
 @mcp.tool()
+async def import_photos(paths: list[str], copy: bool = False, recursive: bool = False,
+                        jobcode: str | None = None, skip_existing: bool = True, wait: bool = True,
+                        timeout_s: int = 1800) -> dict:
+    """Import photos into the darktable library, as darktable's import does.
+    paths: files or folders on the machine darktable runs on (a folder
+    takes the photos in it; recursive=True also its subfolders, e.g. a
+    card's DCIM).
+
+    copy=False adds the files where they are ("add to library"): for photos
+    already in their final place. copy=True copies them into the folders
+    darktable's import settings name ("copy & import", by default
+    ~/Pictures/Darktable/<date>_<jobcode>) and renames them by its file
+    name pattern: for a memory card or a download folder. jobcode names
+    that folder (default: darktable's last one). Ask the user which, and
+    for a jobcode, when it isn't clear.
+
+    skip_existing (default) leaves out photos already in the library (same
+    file, the id darktable's copy & import stores, or the same file name
+    and capture time), so importing a card again brings only what's new.
+    darktable's "ignore non-raws" preference is followed.
+
+    A background job: wait=True waits for it; the result lists imported
+    (image ids and files), skipped (with the photo already there) and
+    failed (with why), and the film_ids they went into. Afterwards
+    make_thumbnails(film_roll_id=...) prepares their thumbnails."""
+    await _require("import")
+    if not paths:
+        raise ToolError("give paths: the files or folders to import")
+    params: dict[str, Any] = {"paths": [os.path.expanduser(p) for p in paths], "copy": copy,
+                              "recursive": recursive, "skip_existing": skip_existing}
+    if jobcode:
+        params["jobcode"] = jobcode
+    return await _run_job(lambda: _call("import", **params), wait, timeout_s)
+
+
+@mcp.tool()
 async def set_rating(image_id: int, rating: int | None = None, reject: bool = False) -> dict:
     """Set a photo's star rating (0-5), or reject it (reject=True), as
     darktable's lighttable does: rejecting keeps the stars, rating clears a
