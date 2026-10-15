@@ -1533,11 +1533,17 @@ async def ai_fill(shape: str = "circle", x: float | None = None, y: float | None
     inpaint model installed (inpaint-lama, or inpaint-migan, in darktable's
     models folder) and AI enabled.
 
-    Size: the model works at 512 x 512 on the shape plus its surroundings, so
-    objects up to about a tenth of the frame fill well at 100%; bigger ones
-    (a main subject) come out soft and blocky up close: say so to the user
-    and check at 100% before calling it done. Returns the instance, name, imgid of the patch photo, file,
-    model, patch box and process_ms."""
+    Size: small to medium shapes only. Shapes up to about 1300 px across
+    at full size (a tail, a sign, a person in the distance; roughly a fifth
+    of the photo's shorter side) fill with believable texture. Larger ones
+    (a main subject) come out as a soft, flat smear, not texture: before
+    filling a large shape, tell the user it will likely not look right.
+    When the reply has a "warning", show it to the user in your answer, as
+    it is, and check the fill at 100% with them. Not available yet when the
+    API is served by darktable's window (headless only). Returns the
+    instance, name, imgid of the patch photo, file, model, patch box,
+    shape_px (the shape's longest side in pixels), process_ms and, for a
+    large shape, warning."""
     await _require("ai_fill", "coords")
     if shape == "gradient":
         raise ToolError("a gradient cannot be filled: use circle, ellipse, path or brush")
@@ -1553,7 +1559,10 @@ async def ai_fill(shape: str = "circle", x: float | None = None, y: float | None
     else:
         sh = await _shape_on_raw(shape, x, y, radius, radius_y, rotation, feather, 0.5, points,
                                  width, hardness, density)
-    return await _edit(None, "ai_fill", shape=sh, context=context, name=name)
+    r = await _edit(None, "ai_fill", shape=sh, context=context, name=name)
+    if r.get("warning"):
+        r["warning"] = f"Tell the user: {r['warning']}"
+    return r
 
 
 # ── retouch ──────────────────────────────────────────────────────────────────
