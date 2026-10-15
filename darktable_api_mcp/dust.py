@@ -511,11 +511,13 @@ def heal_radius(r_dust: float, size: str = "small") -> float:
 
 
 def choose_source(lum: np.ndarray, x: float, y: float, R: float, avoid: list[tuple[float, float, float]],
-                  max_texture: float | None = None) -> dict | None:
+                  max_texture: float | None = None, min_dist: float = 0.0) -> dict | None:
     """Where to copy from: a nearby patch of radius R that is smooth and matches the
     brightness around the spot. avoid: other dust (x, y, r) to stay clear of.
     max_texture: refuse patches rougher than that (std/mean), e.g. branches
     at the sky's edge that a close brightness match would otherwise win.
+    min_dist: the nearest a source may be (pixels), e.g. so that the heal
+    circle's feathered border, which is copied too, stays clear of the dust.
     Returns {"x", "y", "score"} in the image's pixels, or None."""
     h, w = lum.shape
     yy, xx = np.mgrid[0:h, 0:w]
@@ -530,7 +532,8 @@ def choose_source(lum: np.ndarray, x: float, y: float, R: float, avoid: list[tup
     for dist in (2.5, 3.5, 4.5):
         for k in range(16):
             a = 2 * np.pi * k / 16
-            sx, sy = x + dist * R * np.cos(a), y + dist * R * np.sin(a)
+            d = max(min_dist, 2.5 * R) + (dist - 2.5) * R
+            sx, sy = x + d * np.cos(a), y + d * np.sin(a)
             if not (R + 2 <= sx <= w - R - 3 and R + 2 <= sy <= h - R - 3):
                 continue
             if any(np.hypot(sx - ax, sy - ay) < R + 2.5 * ar for ax, ay, ar in avoid):
@@ -542,7 +545,7 @@ def choose_source(lum: np.ndarray, x: float, y: float, R: float, avoid: list[tup
             if max_texture is not None and tex > max_texture:
                 continue
             diff = abs(float(np.mean(p)) - target) / (target + 1e-3)
-            score = tex + 2.0 * diff + 0.01 * dist
+            score = tex + 2.0 * diff + 0.01 * d / R
             if best is None or score < best["score"]:
                 best = {"x": float(sx), "y": float(sy), "score": round(score, 4),
                         "brightness_diff_pct": round(100 * diff, 1), "texture_pct": round(100 * tex, 1)}

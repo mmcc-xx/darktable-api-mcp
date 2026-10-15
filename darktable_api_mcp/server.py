@@ -82,7 +82,7 @@ async def _require(*names: str) -> None:
 # methods that change an edit: the first one on a photo marks compare_before_after's "before"
 _EDIT_METHODS = {"module_set", "module_enable", "preset_apply", "blend_set", "curve_set", "geometry_set",
                  "mask_add", "mask_ai", "mask_remove", "retouch_heal", "retouch_add", "retouch_set",
-                 "retouch_remove", "module_add", "module_remove", "module_move", "module_rename"}
+                 "retouch_remove", "module_add", "module_remove", "module_move", "module_rename", "ai_fill"}
 _before: dict[int, int] = {}    # photo -> history step before your first edit of it
 
 
@@ -1480,6 +1480,17 @@ async def remove_mask(operation: str, formid: int, instance: int = 0) -> dict:
     return await _edit(None, "mask_remove", operation=operation, formid=formid, instance=instance)
 
 
+# where ai_fill writes its patch TIFFs: beside the photo by default; set
+# DTAPI_FILLS_DIR for a library copy, whose photos are someone's originals
+FILLS_DIR = os.environ.get("DTAPI_FILLS_DIR")
+DUST_FILL_NAME = "dust"     # heal_dust_spots' fill instances: "dust #3"
+
+
+async def _ai_fill(image_id: int | None, shape: dict, context: float, name: str) -> dict:
+    extra = {"path": str(Path(FILLS_DIR).expanduser() / "$(FILE.NAME)_fill")} if FILLS_DIR else {}
+    return await _edit(image_id, "ai_fill", shape=shape, context=context, name=name, **extra)
+
+
 def _member_from_listed(s: dict) -> dict:
     """A mask_list shape as a mask_add group member: its geometry (raw
     space) with combine, inverted, opacity and name; formid and active are
@@ -1502,7 +1513,7 @@ async def ai_fill(shape: str = "circle", x: float | None = None, y: float | None
     the shape; switch it off (enable_module) or delete it
     (remove_module_instance) to undo. Its mask can be feathered with
     set_blending and edited like any mask (add_mask, list_masks,
-    remove_mask). One call, about a second.
+    remove_mask). One call, a few seconds (about 6 on a Mac).
 
     The shape is drawn as add_mask does: positions as fractions 0-1 of the
     photo as shown, radius and feather fractions of its shorter side.
@@ -1529,7 +1540,7 @@ async def ai_fill(shape: str = "circle", x: float | None = None, y: float | None
     render_preview(zoom=1) before and after.
 
     The fill is written as a float TIFF beside the photo (in a
-    darktable_fills folder) and imported into the photo's group. Needs the
+    darktable_fills folder, or in DTAPI_FILLS_DIR when the server sets it) and imported into the photo's group. Needs the
     inpaint model installed (inpaint-lama, or inpaint-migan, in darktable's
     models folder) and AI enabled.
 
@@ -1561,7 +1572,7 @@ async def ai_fill(shape: str = "circle", x: float | None = None, y: float | None
     else:
         sh = await _shape_on_raw(shape, x, y, radius, radius_y, rotation, feather, 0.5, points,
                                  width, hardness, density)
-    r = await _edit(None, "ai_fill", shape=sh, context=context, name=name)
+    r = await _ai_fill(None, sh, context, name)
     if r.get("warning"):
         r["warning"] = f"Tell the user: {r['warning']}"
     return r
@@ -1855,6 +1866,15 @@ async def _dust_analysis(image_id: int | None, rebuild_map: bool = False, this_p
     try:
         await engine.open(image_id)
         rl = await engine.edit(image_id, "retouch_list")
+        # heal_dust_spots' AI fills cover their spots as heal circles do
+        fills = [m for m in (await engine.edit(image_id, "module_list"))["modules"]
+                 if m["operation"] == "overlay" and m["enabled"] and m["name"].startswith(DUST_FILL_NAME)]
+        for m in fills:
+            ml = await engine.edit(image_id, "mask_list", operation="overlay", instance=m["instance"])
+            for s in ml.get("shapes", []):
+                for c in s.get("members") or [s]:
+                    if c.get("type") == "circle" and c.get("active", True):
+                        rl["spots"].append({**c, "active": True})
     except EngineError as exc:
         raise _err(exc)
     circles = []
@@ -1987,7 +2007,7 @@ async def _spot_crops(image_id: int, plan: list[dict], size: int = 240) -> dict[
     return out
 
 
-async def _photo_heal_plan(a: dict, s: dict) -> dict | None:
+async def _photo_heal_plan(a: dict, s: dict, need_source: bool = True) -> dict | None:
     """Heal circle for a spot found in this photo alone: sized to the blob's
     whole soft shadow and copying from a smooth patch chosen on the render
     (what the user sees, after any black and white filter), then placed on
@@ -2009,7 +2029,9 @@ async def _photo_heal_plan(a: dict, s: dict) -> dict | None:
     calm = float(np.std(ring) / (np.mean(ring) + 1e-3)) if ring.size else 0.02
     src = dust.choose_source(lum, x, y, R + border, others, max_texture=max(0.015, 2.5 * calm))
     if src is None:
-        return None
+        if need_source:
+            return None
+        src = {"x": x, "y": y}      # an AI fill needs no source
     h, w = lum.shape
     try:
         raw = (await engine.edit(a["image_id"], "coords", points=[[x / w, y / h], [src["x"] / w, src["y"] / h]],
@@ -2027,29 +2049,51 @@ async def _photo_heal_plan(a: dict, s: dict) -> dict | None:
 
 @mcp.tool(structured_output=False)
 async def heal_dust_spots(image_id: int | None = None, spots: list[int] | None = None,
-                          include_visible: bool = False, dry_run: bool = False) -> list:
+                          include_visible: bool = False, method: str = "auto",
+                          dry_run: bool = False) -> list:
     """Heal sensor dust in a photo (default: the open one) with darktable's
-    retouch module.
+    retouch module, or with an AI fill where healing leaves a trace.
 
     By default heals the spots find_dust_spots rates "obvious" that no active
-    retouch circle covers yet; include_visible adds the "visible" ones, and
-    spots=[ids] picks specific ones. Dust find_dust_spots(this_photo=True)
-    found in this photo alone (ids from 101) is healed only when listed in
-    spots, after you looked at its crop sheet; call this on the same edit
-    as find_dust_spots, so the numbers match. Their heal circles cover the
-    blob's whole soft shadow and copy from a smooth patch of the photo as
-    rendered. Each gets a heal circle about twice the
-    dust's radius, copying from a nearby patch chosen to be smooth and to
-    match the brightness around it. All are added as one history step
-    (undo: set_history_end). Not saved until save.
+    retouch circle or dust fill covers yet; include_visible adds the
+    "visible" ones, and spots=[ids] picks specific ones. Dust
+    find_dust_spots(this_photo=True) found in this photo alone (ids from
+    101) is healed only when listed in spots, after you looked at its crop
+    sheet; call this on the same edit as find_dust_spots, so the numbers
+    match.
+
+    method:
+      "auto" (default): a heal circle, or an AI fill (ai_fill) where no
+        clean source patch is nearby. A heal keeps the texture of ground
+        and foliage; a fill smooths it (a soft, slightly lighter disk), but
+        needs no source. Without ai_fill (darktable-api for 5.6) those
+        spots are skipped.
+      "heal": heal circles only.
+      "ai_fill": AI fills only (e.g. dust on a gradient where heals show).
+    A heal circle is about twice the dust's radius, copying from a nearby
+    patch chosen to be smooth and to match the brightness around it; all
+    heal circles are one history step in one retouch instance, and can be
+    pasted to other photos of the roll. Each fill is its own "composite"
+    instance named "dust #id" with a small TIFF in the photo's group (a few
+    seconds each); it applies to this photo only. Undo: set_history_end.
+    Not saved until save.
 
     Checks the result at 100% around each spot before and after and returns
-    the darkening per spot before/after (healed when it mostly disappears),
-    plus a before/after sheet. dry_run=True only returns the plan."""
+    the darkening per spot before/after (healed when it mostly disappears;
+    on textured ground the texture itself reads as a little darkening), plus a before/after sheet. dry_run=True only returns
+    the plan."""
     from mcp.server.fastmcp import Image as McpImage
     import cv2
     import numpy as np
     await _require("retouch_heal", "render.zoom")
+    if method not in ("auto", "heal", "ai_fill"):
+        raise ToolError('method: "auto", "heal" or "ai_fill"')
+    try:
+        can_fill = await engine.supports("ai_fill")
+    except EngineError as exc:
+        raise _err(exc)
+    if method == "ai_fill" and not can_fill:
+        raise ToolError("ai_fill needs darktable-api on darktable master (5.8 on): use method \"heal\"")
     a = await _dust_analysis(image_id, this_photo=any(i >= PHOTO_SPOT_IDS for i in (spots or [])))
     dust = _dust_module()
     geom, lum, image_id = a["geom"], a["lum"], a["image_id"]
@@ -2063,33 +2107,50 @@ async def heal_dust_spots(image_id: int | None = None, spots: list[int] | None =
     avoid = ([(d["x"], d["y"], d["r"]) for d in a["dust_map"]["dust"]]
              + [(d["x"], d["y"], d["r"]) for d in a["spots"] if d["found_in"] == "this photo"]
              + [(c["x"], c["y"], c["r"] / 2.5) for c in a["circles"]])
+    may_fill = can_fill and method != "heal"
     plan = []
     for s in targets:
         if s.get("on_photo") is None:
             skipped.append({"id": s["id"], "why": "outside the photo as cropped"})
             continue
+        fill = method == "ai_fill"
         if s["found_in"] == "this photo":
-            p = await _photo_heal_plan(a, s)
+            p = await _photo_heal_plan(a, s, need_source=not may_fill)
             if p is None:
                 skipped.append({"id": s["id"], "why": "no clean source patch nearby"})
-            else:
-                plan.append(p)
+                continue
+            if p["source"].get("brightness_diff_pct") is None:
+                fill = True
+            plan.append({**p, "method": "ai_fill" if fill else "heal"})
             continue
         # a blob found in one photo is measured at its most even radius,
         # inside its soft edge: twice that covers it
-        R = dust.heal_radius(s["r"], "small" if s["found_in"] == "this photo" else s.get("size", "small"))
-        src = dust.choose_source(lum, s["x"], s["y"], R, [v for v in avoid if (v[0], v[1]) != (s["x"], s["y"])])
-        if src is None:
-            skipped.append({"id": s["id"], "why": "no clean source patch nearby"})
-            continue
-        plan.append({"spot": s, "R": R, "source": src, "spec": dust.heal_spec(s, src, R, geom)})
-    summary = {"image_id": image_id, "file": a["info"]["filename"],
-               "plan": [{"id": p["spot"]["id"], "status": p["spot"]["status"],
-                         "heal_diameter_px": int(round(4 * p["R"])),
-                         "source_offset_px": [int(round(2 * (p["source"]["x"] - p["spot"]["x"]))),
-                                              int(round(2 * (p["source"]["y"] - p["spot"]["y"])))],
-                         "source_brightness_diff_pct": p["source"]["brightness_diff_pct"],
-                         "circle": p["spec"]} for p in plan],
+        R = dust.heal_radius(s["r"], s.get("size", "small"))
+        # darktable feathers a heal circle by a border it copies too (as in
+        # _photo_heal_plan): a source closer than that pastes the dust beside it
+        border = 0.02 * min(geom["raw_width"], geom["raw_height"]) / 2
+        src = None if fill else dust.choose_source(
+            lum, s["x"], s["y"], R, [v for v in avoid if (v[0], v[1]) != (s["x"], s["y"])],
+            min_dist=R + border + s["r"])
+        if src is None and not fill:
+            if not may_fill:
+                skipped.append({"id": s["id"], "why": "no clean source patch nearby"})
+                continue
+            fill = True
+        src = src or {"x": s["x"], "y": s["y"]}
+        plan.append({"spot": s, "R": R, "source": src, "spec": dust.heal_spec(s, src, R, geom),
+                     "method": "ai_fill" if fill else "heal"})
+
+    def planned(p: dict) -> dict:
+        e = {"id": p["spot"]["id"], "status": p["spot"]["status"], "background": p["spot"]["background"],
+             "method": p["method"], "diameter_px": int(round(4 * p["R"]))}
+        if p["method"] == "heal":
+            e.update(source_offset_px=[int(round(2 * (p["source"]["x"] - p["spot"]["x"]))),
+                                       int(round(2 * (p["source"]["y"] - p["spot"]["y"])))],
+                     source_brightness_diff_pct=p["source"]["brightness_diff_pct"], circle=p["spec"])
+        return e
+
+    summary = {"image_id": image_id, "file": a["info"]["filename"], "plan": [planned(p) for p in plan],
                "skipped": skipped}
     if not plan:
         summary["note"] = "nothing to heal" + ("" if a["spots"] else ": no dust mapped for this roll")
@@ -2098,29 +2159,45 @@ async def heal_dust_spots(image_id: int | None = None, spots: list[int] | None =
         return [json.dumps(summary),
                 McpImage(data=dust.crop_sheet(lum, [p["spot"] for p in plan]), format="png")]
 
+    async def fill(p: dict) -> dict:
+        c = p["spec"]
+        sh = {"type": "circle", "x": c["x"], "y": c["y"], "r": c["r"], "border": round(0.45 * c["r"], 5)}
+        r = await _ai_fill(image_id, sh, 0.5, f"{DUST_FILL_NAME} #{p['spot']['id']}")
+        return {"id": p["spot"]["id"], "instance": r.get("instance"), "process_ms": r.get("process_ms")}
+
+    heals = [p for p in plan if p["method"] == "heal"]
+    fills = []
     try:
         before = await _spot_crops(image_id, plan)
         await _note_before(image_id)
-        r = await engine.edit(image_id, "retouch_heal", spots=[p["spec"] for p in plan])
+        if heals:
+            r = await engine.edit(image_id, "retouch_heal", spots=[p["spec"] for p in heals])
+            summary["added"] = r["added"]
+        for p in plan:
+            if p["method"] == "ai_fill":
+                fills.append(await fill(p))
         after = await _spot_crops(image_id, plan)
+        summary["history_end"] = (await engine.edit(image_id, "history_list"))["history_end"]
     except EngineError as exc:
         raise _err(exc)
-    summary.update(added=r["added"], history_end=r["history_end"])
+    if fills:
+        summary["fills"] = fills
     checks, rows = [], []
     for p in plan:
         sid = p["spot"]["id"]
         if sid not in before or sid not in after:
-            checks.append({"id": sid, "result": "not checked (render overtaken)"})
+            checks.append({"id": sid, "method": p["method"], "result": "not checked (render overtaken)"})
             continue
         (lb, x, y), (la, _, _) = before[sid], after[sid]
         rr = max(6.0, 2 * p["spot"]["r"])            # full-size pixels: a 100% render
         db, da = dust.darkening_at(lb, x, y, rr), dust.darkening_at(la, x, y, rr)
-        checks.append({"id": sid, "darkening_before_pct": round(100 * db, 1),
-                       "darkening_after_pct": round(100 * da, 1), "healed": da <= max(0.02, 0.4 * db)})
+        c = {"id": sid, "method": p["method"], "darkening_before_pct": round(100 * db, 1),
+             "darkening_after_pct": round(100 * da, 1), "healed": da <= max(0.02, 0.4 * db)}
+        checks.append(c)
         pair = []
         for img in (lb, la):
-            c = np.clip((img - img.mean()) / (6 * img.std() + 1e-6) + 0.5, 0, 1)
-            t = cv2.cvtColor((c * 255).astype(np.uint8), cv2.COLOR_GRAY2BGR)
+            n = np.clip((img - img.mean()) / (6 * img.std() + 1e-6) + 0.5, 0, 1)
+            t = cv2.cvtColor((n * 255).astype(np.uint8), cv2.COLOR_GRAY2BGR)
             cv2.putText(t, f"#{sid}", (4, 16), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (60, 200, 60), 1)
             pair.append(t)
         rows.append(np.hstack(pair))
@@ -2133,7 +2210,6 @@ async def heal_dust_spots(image_id: int | None = None, spots: list[int] | None =
         if ok:
             out.append(McpImage(data=png.tobytes(), format="png"))
     return out
-
 
 @mcp.tool()
 async def check_sensor_clipping(image_id: int | None = None) -> dict:

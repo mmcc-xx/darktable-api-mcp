@@ -44,6 +44,10 @@ blobs, most visible on smooth bright areas at small apertures.
    history step, and checks each before/after at 100%. Add
    `include_visible=True` when the visible ones show in plain areas, or
    `spots=[ids]` for a choice. `dry_run=True` shows the plan first.
+   Where no clean source patch is nearby it uses an AI fill instead
+   (darktable master; on 5.6 those spots are skipped). Heals keep ground
+   and foliage texture; a fill smooths it, so don't ask for
+   `method="ai_fill"` on textured areas.
 3. Check its before/after sheet and the "healed" per spot. A spot that
    didn't heal: `render_preview(zoom=1)` there, then fix it by hand (below).
 4. Dust it can't map (one-off specks, faint blobs that only show in this
