@@ -1840,10 +1840,31 @@ async def _photo_spots(image_id: int, geom: dict, mapped: list[dict]) -> tuple[l
     return out, lum
 
 
-async def _dust_analysis(image_id: int | None, rebuild_map: bool = False, this_photo: bool = False) -> dict:
+async def _mono_edit(image_id: int, modules: list[dict]) -> str | None:
+    """Whether the edit turns the photo black and white, and how: an enabled
+    color calibration instance with a gray mix (what darktable applies when
+    any of its R, G, B weights is nonzero) or the monochrome module."""
+    for m in modules:
+        if not m["enabled"]:
+            continue
+        if m["operation"] == "monochrome":
+            return "monochrome module"
+        if m["operation"] == "channelmixerrgb":
+            g = await engine.edit(image_id, "module_get", operation="channelmixerrgb", instance=m["instance"])
+            grey = next((f["value"] for f in g["fields"] if f["name"] == "grey"), None)
+            if grey and any(v != 0 for v in grey[:3]):
+                r, gr, b = grey[:3]
+                kind = "red-weighted gray mix" if r > max(gr, b) else "gray mix"
+                return f"color calibration {kind} (R {r:.2f}, G {gr:.2f}, B {b:.2f})"
+    return None
+
+
+async def _dust_analysis(image_id: int | None, rebuild_map: bool = False, this_photo: bool | None = False) -> dict:
     """What find_dust_spots and heal_dust_spots need for one photo. Opens it
     (joining an edit already open) so retouch circles include unsaved ones.
-    this_photo adds the dust found in this photo alone (_photo_spots)."""
+    this_photo adds the dust found in this photo alone (_photo_spots); None:
+    when the edit is black and white (_mono_edit), where a filter's tones
+    bring out dust the roll's map doesn't have."""
     dust = _dust_module()
     await _require("coords", "retouch_list")
     if image_id is None:
@@ -1867,7 +1888,9 @@ async def _dust_analysis(image_id: int | None, rebuild_map: bool = False, this_p
         await engine.open(image_id)
         rl = await engine.edit(image_id, "retouch_list")
         # heal_dust_spots' AI fills cover their spots as heal circles do
-        fills = [m for m in (await engine.edit(image_id, "module_list"))["modules"]
+        modules = (await engine.edit(image_id, "module_list"))["modules"]
+        mono = await _mono_edit(image_id, modules) if this_photo is None else None
+        fills = [m for m in modules
                  if m["operation"] == "overlay" and m["enabled"] and m["name"].startswith(DUST_FILL_NAME)]
         for m in fills:
             ml = await engine.edit(image_id, "mask_list", operation="overlay", instance=m["instance"])
@@ -1886,6 +1909,8 @@ async def _dust_analysis(image_id: int | None, rebuild_map: bool = False, this_p
     for s in spots:
         s["found_in"] = "roll"
     photo_lum = None
+    if this_photo is None:
+        this_photo = mono is not None
     if this_photo:
         photo, photo_lum = await _photo_spots(image_id, geom, dust_map["dust"])
         spots += photo
@@ -1904,7 +1929,7 @@ async def _dust_analysis(image_id: int | None, rebuild_map: bool = False, this_p
         for s, (u, v) in zip(mapped, pts):
             s["on_photo"] = [round(u, 4), round(v, 4)] if 0 <= u <= 1 and 0 <= v <= 1 else None
     return {"image_id": image_id, "info": info, "dust_map": dust_map, "lum": lum, "geom": geom,
-            "circles": circles, "spots": spots, "photo_lum": photo_lum}
+            "circles": circles, "spots": spots, "photo_lum": photo_lum, "this_photo": this_photo, "mono": mono}
 
 
 def _dust_spot_json(s: dict, geom: dict) -> dict:
@@ -1917,7 +1942,7 @@ def _dust_spot_json(s: dict, geom: dict) -> dict:
 
 @mcp.tool(structured_output=False)
 async def find_dust_spots(image_id: int | None = None, rebuild_map: bool = False,
-                          this_photo: bool = False) -> list:
+                          this_photo: bool | None = None) -> list:
     """Find sensor dust in a photo (default: the open one). Read-only.
 
     Dust sits at the same sensor position in every frame, so this maps the
@@ -1935,8 +1960,12 @@ async def find_dust_spots(image_id: int | None = None, rebuild_map: bool = False
     second crop sheet (the photo as rendered), at most 8, the strongest
     first. One photo can't prove a blob is dust (in a noisy sky, noise and
     soft cloud gradients look alike): look at that sheet and heal only the
-    round soft shadows, heal_dust_spots(spots=[ids]). Use it after a strong
-    black and white conversion, or when the user sees spots the map lacks.
+    round soft shadows, heal_dust_spots(spots=[ids]). Left out (None), it
+    is on when the edit is black and white (a color calibration gray mix or
+    the monochrome module; the summary's this_photo_reason says which) and
+    off otherwise; True when the user sees spots the map lacks. Converting
+    a photo to black and white changes what dust shows: search again after
+    the conversion, not only before it.
 
     Returns a summary and a sheet of numbered crops (sensor orientation,
     contrast-stretched; green = visible here, red = hidden). Per spot: status
@@ -1973,9 +2002,11 @@ async def find_dust_spots(image_id: int | None = None, rebuild_map: bool = False
             "by eye (render_preview zoom=1 on the sky) instead.")
     roll = [s for s in a["spots"] if s["found_in"] == "roll"]
     photo = [s for s in a["spots"] if s["found_in"] == "this photo"]
-    if this_photo:
+    if a["this_photo"]:
         summary["this_photo"] = ([s["id"] for s in photo] if photo else
                                  "no round dust-like blobs on smooth areas of this render")
+        if this_photo is None:
+            summary["this_photo_reason"] = f"black and white edit: {a['mono']}"
     result = [json.dumps(summary)]
     if roll or not photo:
         result += ["Crops of the roll's dust (sensor orientation):",

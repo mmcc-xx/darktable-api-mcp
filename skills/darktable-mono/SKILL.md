@@ -183,10 +183,13 @@ light or dark.
 ## Finishing
 
 Before saving, check the sky and plain areas for sensor dust (darktable-
-cleanup, "Sensor dust"): in black and white, dust spots stand out more,
-and a red or orange filter darkens a blue sky and shows faint dust.
-`heal_dust_spots(include_visible=True)`, then
-`find_dust_spots(this_photo=True)` for spots only this edit shows.
+cleanup, "Sensor dust"), after the conversion, even if you healed dust
+in color: in black and white, dust spots stand out more, and a red or
+orange filter darkens a blue sky and shows faint dust. `find_dust_spots()`
+on the B&W edit (it also searches this render on its own, spots from
+101), look at both crop sheets, then `heal_dust_spots(include_visible=True)`
+and `heal_dust_spots(spots=[101, ...])` for the round soft shadows on the
+second sheet.
 
 Describe what changed from your measurements (e.g. "sky from L 53 to 50,
 darker"), and make the words match the numbers.

@@ -60,9 +60,11 @@ blobs, most visible on smooth bright areas at small apertures.
    with `retouch_spots` as below.
 
 **After black and white,** especially a red or orange filter (it darkens a
-blue sky and brings dust out): `heal_dust_spots(include_visible=True)`
-first (spots the map rated "visible" often show now), then
-`find_dust_spots(this_photo=True)` for the rest.
+blue sky and brings dust out), search again even if you healed in color:
+`find_dust_spots()` on a B&W edit also searches the render on its own
+(`this_photo_reason` in the summary says why), `heal_dust_spots(include_visible=True)`
+(spots the map rated "visible" often show now), then
+`heal_dust_spots(spots=[101, ...])` for the ones on the second sheet.
 
 Spots come in two sizes (`size`): "small" specks (~20–60 px) and "large"
 soft blobs (~50–300 px, dust further from the sensor). A large spot in a
