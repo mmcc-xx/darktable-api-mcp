@@ -1539,9 +1539,10 @@ async def ai_fill(shape: str = "circle", x: float | None = None, y: float | None
     (a main subject) come out as a soft, flat smear, not texture: before
     filling a large shape, tell the user it will likely not look right.
     When the reply has a "warning", show it to the user in your answer, as
-    it is, and check the fill at 100% with them. Not available yet when the
-    API is served by darktable's window (headless only), nor on
-    darktable-api for 5.6 (it needs darktable master, or 5.8 on). Returns the
+    it is, and check the fill at 100% with them. In darktable's window the
+    user can mark the area themselves: a drawn mask on any module (e.g. a
+    spare exposure instance), then like_mask_of that module. Not available
+    on darktable-api for 5.6 (it needs darktable master, or 5.8 on). Returns the
     instance, name, imgid of the patch photo, file, model, patch box,
     shape_px (the shape's longest side in pixels), process_ms and, for a
     large shape, warning."""
