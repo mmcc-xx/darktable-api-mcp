@@ -1422,7 +1422,10 @@ async def add_ai_mask(operation: str, include: list[list[float]], exclude: list[
 @mcp.tool()
 async def list_masks(operation: str, instance: int = 0) -> dict:
     """The drawn shapes on a module's mask: formid (for remove_mask), name,
-    type, combine, inverted, and where it is on the photo as add_mask takes
+    type, combine (how it joins the shapes before it; with darktable's
+    flexi masks, master and 5.8 on, its group's operator, which the user's
+    masks panel can also set to screen, product or sum), inverted, and
+    where it is on the photo as add_mask takes
     it: on_photo (x, y fractions of the photo as shown); circles and
     ellipses also radius (radius_y, rotation for an ellipse) and feather,
     fractions of the photo's shorter side, so a shape can be redrawn
