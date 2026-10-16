@@ -1490,7 +1490,8 @@ DUST_FILL_NAME = "dust"     # heal_dust_spots' fill instances: "dust #3"
 
 
 async def _ai_fill(image_id: int | None, shape: dict, context: float, name: str,
-                   model: str = "local", prompt: str = "") -> dict:
+                   model: str = "local", prompt: str = "", upscale: bool = False,
+                   online_size: int = 1024) -> dict:
     extra = {"path": str(Path(FILLS_DIR).expanduser() / "$(FILE.NAME)_fill")} if FILLS_DIR else {}
     if model == "local":
         return await _edit(image_id, "ai_fill", shape=shape, context=context, name=name, **extra)
@@ -1504,13 +1505,16 @@ async def _ai_fill(image_id: int | None, shape: dict, context: float, name: str,
     bfl.api_key()                               # no key: refuse before any edit
     work = Path(tempfile.mkdtemp(prefix="dtapi-flux-"))
     try:
+        if not 512 <= online_size <= 2048 or online_size % 64:
+            raise ToolError("online_size: 512-2048, a multiple of 64 (the crop's side sent online)")
         r = await _edit(image_id, "ai_fill", shape=shape, context=context, name=name,
-                        crop_to=str(work / "crop"), size=1024)
+                        crop_to=str(work / "crop"), size=online_size)
         inst = r["instance"]
         try:
             info = await bfl.fill(model, Path(r["image"]), Path(r["mask"]), work / "filled.png", prompt)
             out = await _edit(image_id, "ai_fill", instance=inst, filled=str(work / "filled.png"),
-                              model=f"{bfl.MODELS[model][1]} (Black Forest Labs)", context=context, **extra)
+                              model=f"{bfl.MODELS[model][1]} (Black Forest Labs)", context=context,
+                              upscale=upscale, **extra)
         except BaseException:
             # the instance crop_to set up has no patch: take it away again
             try:
@@ -1572,7 +1576,7 @@ async def ai_fill(shape: str = "circle", x: float | None = None, y: float | None
                   hardness: float = 0.5, density: float = 1.0, like_mask_of: str | None = None,
                   like_mask_instance: int = 0, like_mask_shapes: list[str | int] | None = None,
                   context: float = 0.5, name: str = "fill", model: str = "local",
-                  prompt: str = "") -> dict:
+                  prompt: str = "", upscale: bool = False, online_size: int = 1024) -> dict:
     """Remove an object or blemish: the area inside a shape is filled by an
     AI inpainting model (LaMa) from its surroundings. Non-destructive: a
     new "composite" module instance called `name` shows the fill, masked by
@@ -1617,6 +1621,14 @@ async def ai_fill(shape: str = "circle", x: float | None = None, y: float | None
         On a face it paints a new eye or nose rather than fur: for
         replacing or adding, not removing.
     FLUX results differ from run to run: fill twice and compare to choose.
+    Online fills are made at online_size (default 1024, up to 2048; the
+    models were trained near 1024): a crop larger than that comes back
+    softer than the photo (patch.size vs patch.model_size in the reply).
+    upscale=True (online only) runs such a fill through darktable's AI
+    upscaler (RealPLKSR, 2x or 4x, local) before placing it: sharper, with
+    detail the upscaler invents; patch.upscaled in the reply gives the
+    factor, missing when no upscale model is installed. Seconds on a GPU,
+    minutes on a CPU.
 
     context 0.25-4 (default 0.5): how much of the surroundings the model
     sees, in shape sizes. Smaller keeps texture sharper; larger (e.g. 1.0)
@@ -1663,7 +1675,7 @@ async def ai_fill(shape: str = "circle", x: float | None = None, y: float | None
     else:
         sh = await _shape_on_raw(shape, x, y, radius, radius_y, rotation, feather, 0.5, points,
                                  width, hardness, density)
-    r = await _ai_fill(None, sh, context, name, model, prompt)
+    r = await _ai_fill(None, sh, context, name, model, prompt, upscale, online_size)
     if r.get("warning"):
         r["warning"] = f"Tell the user: {r['warning']}"
     return r
