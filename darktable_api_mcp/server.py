@@ -1614,13 +1614,21 @@ async def ai_fill(shape: str = "circle", x: float | None = None, y: float | None
     else, is uploaded; cents and 10-30 s a fill; needs the user's BFL key in
     BFL_API_KEY or ~/.config/darktable-api-mcp/bfl_api_key; use them when
     the user asks or agreed to send crops online):
-      "flux-erase": FLUX Erase, made to remove an object: fills with what
-        is around it, with real texture. The choice for removals.
+      "flux-erase": FLUX Erase, made to remove an object. Best for small
+        to medium objects within texture (an eye in fur: no trace). On a
+        large area it re-renders with a look of its own (sharp close-up
+        texture against a soft background), and the patch shows.
       "flux": FLUX.1 Fill [pro]: paints what belongs there, guided by
-        prompt (e.g. "dry grass"; negatives such as "no eye" don't work).
-        On a face it paints a new eye or nose rather than fur: for
-        replacing or adding, not removing.
-    FLUX results differ from run to run: fill twice and compare to choose.
+        prompt. Best for large areas and backgrounds with a prompt that
+        describes the scene, e.g. "an empty field of tall dry grass" for
+        a whole animal: it keeps the photo's pixels around the hole, so
+        focus and color match. It may paint something unwanted (a zebra
+        for "dry prairie grass"; on a face a new eye or nose); negatives
+        such as "no eye" don't work.
+    FLUX results differ from run to run: fill two or three times and
+    compare to choose. A fill made online is color matched to the photo
+    (what the model did to the pixels it should have kept is undone in the
+    fill; patch.color_match in the reply).
     Online fills are made at online_size (default 1024, up to 2048; the
     models were trained near 1024): a crop larger than that comes back
     softer than the photo (patch.size vs patch.model_size in the reply).
