@@ -11,6 +11,11 @@ on:
     branches: [main]
     paths: [README.md, tests/readme_quickstart.py, .github/workflows/quickstart.yml]
 
+permissions:
+  contents: read
+  issues: write     # the report job's issue
+  actions: read     # which jobs failed
+
 jobs:
   ubuntu:
     runs-on: ubuntu-24.04
@@ -50,3 +55,23 @@ jobs:
           name: macos-${{ matrix.branch }}-logs
           path: ${{ runner.temp }}/home/*.log
           if-no-files-found: ignore
+
+  # a scheduled or manual run that failed opens an issue here (or comments
+  # on the open one), so it isn't only an email; a push's failure is seen
+  # by whoever pushed
+  report:
+    needs: [ubuntu, macos]
+    if: failure() && github.event_name != 'push'
+    runs-on: ubuntu-24.04
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - run: |
+          title="README quick start failed"
+          { echo "Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }} (logs in its artifacts)"
+            echo; echo "Failed:"
+            gh run view ${{ github.run_id }} -R "$GITHUB_REPOSITORY" --json jobs \
+              --jq '.jobs[] | select(.conclusion == "failure") | "- " + .name'; } > issue.md
+          n=$(gh issue list -R "$GITHUB_REPOSITORY" --state open --search "\"$title\" in:title" --json number --jq '.[0].number // empty')
+          if [ -n "$n" ]; then gh issue comment "$n" -R "$GITHUB_REPOSITORY" --body-file issue.md
+          else gh issue create -R "$GITHUB_REPOSITORY" --title "$title" --body-file issue.md; fi
