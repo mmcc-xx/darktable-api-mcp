@@ -1497,7 +1497,7 @@ async def _ai_fill(image_id: int | None, shape: dict, context: float, name: str,
         return await _edit(image_id, "ai_fill", shape=shape, context=context, name=name, **extra)
     from . import bfl
     if model not in bfl.MODELS:
-        raise ToolError(f"model: 'local' (LaMa, on this machine), 'flux-erase' or 'flux' (online), not '{model}'")
+        raise ToolError(f"model: 'local' (LaMa, on this machine), 'flux-erase', 'flux' or 'flux3' (online), not '{model}'")
     # at Black Forest Labs: the engine writes the crop, BFL fills it, the
     # engine places the fill. FLUX works best near a megapixel
     await _require("ai_fill.external")
@@ -1625,6 +1625,13 @@ async def ai_fill(shape: str = "circle", x: float | None = None, y: float | None
         focus and color match. It may paint something unwanted (a zebra
         for "dry prairie grass"; on a face a new eye or nose); negatives
         such as "no eye" don't work.
+      "flux3": FLUX 3 Image, BFL's newest: no mask, an instruction; prompt
+        names what to remove ("the ring of stones"; empty: "the object"
+        in the middle of the crop), or is a whole instruction starting
+        with "Remove". It re-renders the whole crop (brighter, other
+        detail) but only the shape is used, color matched. A removal
+        that doesn't invent things, like flux-erase but slower (~30 s)
+        and dearer (~5 credits); try it where flux-erase leaves a trace.
     FLUX results differ from run to run: fill two or three times and
     compare to choose. A fill made online is color matched to the photo
     (what the model did to the pixels it should have kept is undone in the
