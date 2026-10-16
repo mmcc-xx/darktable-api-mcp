@@ -1504,12 +1504,38 @@ def _member_from_listed(s: dict) -> dict:
     return m
 
 
+def _pick_shapes(shapes: list[dict], wanted: list[str | int], op: str, instance: int) -> list[dict]:
+    """The shapes of a mask_list reply named in `wanted`: a formid, or a
+    name as listed ("circle eye") or without darktable's type word
+    ("eye"), in any case; in the mask's order."""
+    def keys(s: dict) -> set[str]:
+        n = (s.get("name") or "").strip().lower()
+        k = {str(s.get("formid")), n}
+        t = (s.get("type") or "").lower()
+        if t and n.startswith(t + " "):
+            k.add(n[len(t) + 1:].strip())
+        return k
+    want = [str(w).strip().lower() for w in wanted]
+    missing = [w for w, o in zip(want, wanted) if not any(w in keys(s) for s in shapes)]
+    if missing:
+        names = ", ".join(f"'{s.get('name')}' ({s.get('formid')})" for s in shapes) or "none"
+        raise ToolError(f"no shape {', '.join(repr(str(m)) for m in missing)} on {op} (instance "
+                        f"{instance}); its shapes: {names}")
+    picked = [dict(s) for s in shapes if keys(s) & set(want)]
+    if "combine" in picked[0]:
+        # the first shape starts the mask: its operator joined it to a shape
+        # that is not taken
+        picked[0]["combine"] = "union"
+    return picked
+
+
 @mcp.tool()
 async def ai_fill(shape: str = "circle", x: float | None = None, y: float | None = None,
                   radius: float = 0.05, radius_y: float | None = None, rotation: float = 0.0,
                   feather: float = 0.01, points: list[list[float]] | None = None, width: float = 0.03,
                   hardness: float = 0.5, density: float = 1.0, like_mask_of: str | None = None,
-                  like_mask_instance: int = 0, context: float = 0.5, name: str = "fill") -> dict:
+                  like_mask_instance: int = 0, like_mask_shapes: list[str | int] | None = None,
+                  context: float = 0.5, name: str = "fill") -> dict:
     """Remove an object or blemish: the area inside a shape is filled by an
     AI inpainting model (LaMa) from its surroundings. Non-destructive: a
     new "composite" module instance called `name` shows the fill, masked by
@@ -1533,6 +1559,13 @@ async def ai_fill(shape: str = "circle", x: float | None = None, y: float | None
     (instance like_mask_instance); the shape, x, y and radius arguments are
     then ignored. Remove that helper module's mask afterwards (remove_mask)
     if it was only made for this.
+    like_mask_shapes: only these shapes of that mask, by name (as
+    list_masks shows it, e.g. "circle eye", or without darktable's type
+    word, "eye"; any case) or formid, e.g. ["eye"] when the user drew
+    "eye" and "nose" on one module and wants only the eye filled. The
+    shape is used as drawn, feather included: the fill fades out across
+    the feather, so a shape with a small core and a wide feather leaves
+    the object partly showing.
 
     context 0.25-4 (default 0.5): how much of the surroundings the model
     sees, in shape sizes. Smaller keeps texture sharper; larger (e.g. 1.0)
@@ -1555,7 +1588,8 @@ async def ai_fill(shape: str = "circle", x: float | None = None, y: float | None
     When the reply has a "warning", show it to the user in your answer, as
     it is, and check the fill at 100% with them. In darktable's window the
     user can mark the area themselves: a drawn mask on any module (e.g. a
-    spare exposure instance), then like_mask_of that module. Not available
+    spare exposure instance), then like_mask_of that module
+    (like_mask_shapes to take some of its shapes). Not available
     on darktable-api for 5.6 (it needs darktable master, or 5.8 on). Returns the
     instance, name, imgid of the patch photo, file, model, patch box,
     shape_px (the shape's longest side in pixels), process_ms and, for a
@@ -1567,8 +1601,10 @@ async def ai_fill(shape: str = "circle", x: float | None = None, y: float | None
     if like_mask_of:
         await _require("mask_list")
         r = await _edit(None, "mask_list", operation=like_mask_of, instance=like_mask_instance)
-        members = [_member_from_listed(s) for s in r.get("shapes", [])
-                   if s.get("active", True) and s.get("type") != "other"]
+        shapes = [s for s in r.get("shapes", []) if s.get("active", True) and s.get("type") != "other"]
+        if like_mask_shapes:
+            shapes = _pick_shapes(shapes, like_mask_shapes, like_mask_of, like_mask_instance)
+        members = [_member_from_listed(s) for s in shapes]
         if not members:
             raise ToolError(f"module '{like_mask_of}' (instance {like_mask_instance}) has no mask shapes")
         sh: dict[str, Any] = {"type": "group", "members": members}
