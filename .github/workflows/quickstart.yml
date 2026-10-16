@@ -6,7 +6,7 @@ name: README quick start
 on:
   workflow_dispatch:
   schedule:
-    - cron: "0 6 * * 1"        # weekly, after the fork's weekly merge of darktable master
+    - cron: "0 6 * * 2"        # Tuesdays: after the Monday merge of darktable master has been tested on the Mac and pushed
   push:
     branches: [main]
     paths: [README.md, tests/readme_quickstart.py, .github/workflows/quickstart.yml]
