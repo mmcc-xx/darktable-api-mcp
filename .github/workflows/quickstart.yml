@@ -29,7 +29,11 @@ jobs:
       # what a desktop Ubuntu has before the README starts (and curl for the test)
       - run: apt-get update && apt-get install -y sudo git python3 ca-certificates curl
       - uses: actions/checkout@v4
-      - run: python3 tests/readme_quickstart.py --platform ubuntu --branch ${{ matrix.branch }}
+      - env:
+          # darktable's cmake asks the GitHub API for ONNX Runtime's checksum;
+          # unauthenticated, runners share an hourly limit and it fails
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python3 tests/readme_quickstart.py --platform ubuntu --branch ${{ matrix.branch }}
                --home "$RUNNER_TEMP/home" --mcp-src "$GITHUB_WORKSPACE"
       - if: failure()
         uses: actions/upload-artifact@v4
@@ -47,7 +51,11 @@ jobs:
         branch: [darktable-api-5.6, darktable-api]
     steps:
       - uses: actions/checkout@v4
-      - run: python3 tests/readme_quickstart.py --platform macos --branch ${{ matrix.branch }}
+      - env:
+          # darktable's cmake asks the GitHub API for ONNX Runtime's checksum;
+          # unauthenticated, runners share an hourly limit and it fails
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python3 tests/readme_quickstart.py --platform macos --branch ${{ matrix.branch }}
                --home "$RUNNER_TEMP/home" --mcp-src "$GITHUB_WORKSPACE"
       - if: failure()
         uses: actions/upload-artifact@v4
