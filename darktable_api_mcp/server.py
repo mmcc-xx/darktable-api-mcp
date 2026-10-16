@@ -1489,9 +1489,45 @@ FILLS_DIR = os.environ.get("DTAPI_FILLS_DIR")
 DUST_FILL_NAME = "dust"     # heal_dust_spots' fill instances: "dust #3"
 
 
-async def _ai_fill(image_id: int | None, shape: dict, context: float, name: str) -> dict:
+async def _ai_fill(image_id: int | None, shape: dict, context: float, name: str,
+                   model: str = "local", prompt: str = "") -> dict:
     extra = {"path": str(Path(FILLS_DIR).expanduser() / "$(FILE.NAME)_fill")} if FILLS_DIR else {}
-    return await _edit(image_id, "ai_fill", shape=shape, context=context, name=name, **extra)
+    if model == "local":
+        return await _edit(image_id, "ai_fill", shape=shape, context=context, name=name, **extra)
+    from . import bfl
+    if model not in bfl.MODELS:
+        raise ToolError(f"model: 'local' (LaMa, on this machine), 'flux-erase' or 'flux' (online), not '{model}'")
+    # at Black Forest Labs: the engine writes the crop, BFL fills it, the
+    # engine places the fill. FLUX works best near a megapixel
+    await _require("ai_fill.external")
+    import tempfile
+    bfl.api_key()                               # no key: refuse before any edit
+    work = Path(tempfile.mkdtemp(prefix="dtapi-flux-"))
+    try:
+        r = await _edit(image_id, "ai_fill", shape=shape, context=context, name=name,
+                        crop_to=str(work / "crop"), size=1024)
+        inst = r["instance"]
+        try:
+            info = await bfl.fill(model, Path(r["image"]), Path(r["mask"]), work / "filled.png", prompt)
+            out = await _edit(image_id, "ai_fill", instance=inst, filled=str(work / "filled.png"),
+                              model=f"{bfl.MODELS[model][1]} (Black Forest Labs)", context=context, **extra)
+        except BaseException:
+            # the instance crop_to set up has no patch: take it away again
+            try:
+                if inst:
+                    await _edit(image_id, "module_remove", operation="overlay", instance=inst)
+                else:
+                    await _edit(image_id, "module_enable", operation="overlay", instance=0, enabled=False)
+            except Exception:
+                pass
+            raise
+        out["bfl"] = info
+        return out
+    except bfl.BflError as exc:
+        raise ToolError(str(exc)) from None
+    finally:
+        import shutil
+        shutil.rmtree(work, ignore_errors=True)
 
 
 def _member_from_listed(s: dict) -> dict:
@@ -1535,7 +1571,8 @@ async def ai_fill(shape: str = "circle", x: float | None = None, y: float | None
                   feather: float = 0.01, points: list[list[float]] | None = None, width: float = 0.03,
                   hardness: float = 0.5, density: float = 1.0, like_mask_of: str | None = None,
                   like_mask_instance: int = 0, like_mask_shapes: list[str | int] | None = None,
-                  context: float = 0.5, name: str = "fill") -> dict:
+                  context: float = 0.5, name: str = "fill", model: str = "local",
+                  prompt: str = "") -> dict:
     """Remove an object or blemish: the area inside a shape is filled by an
     AI inpainting model (LaMa) from its surroundings. Non-destructive: a
     new "composite" module instance called `name` shows the fill, masked by
@@ -1567,6 +1604,20 @@ async def ai_fill(shape: str = "circle", x: float | None = None, y: float | None
     the feather, so a shape with a small core and a wide feather leaves
     the object partly showing.
 
+    model: "local" (default): LaMa on this machine, free, a few seconds;
+    smooth on fur, hair and fine detail. Online, at Black Forest Labs (the
+    crop around the shape, about context x 2 + 1 shape sizes and nothing
+    else, is uploaded; cents and 10-30 s a fill; needs the user's BFL key in
+    BFL_API_KEY or ~/.config/darktable-api-mcp/bfl_api_key; use them when
+    the user asks or agreed to send crops online):
+      "flux-erase": FLUX Erase, made to remove an object: fills with what
+        is around it, with real texture. The choice for removals.
+      "flux": FLUX.1 Fill [pro]: paints what belongs there, guided by
+        prompt (e.g. "dry grass"; negatives such as "no eye" don't work).
+        On a face it paints a new eye or nose rather than fur: for
+        replacing or adding, not removing.
+    FLUX results differ from run to run: fill twice and compare to choose.
+
     context 0.25-4 (default 0.5): how much of the surroundings the model
     sees, in shape sizes. Smaller keeps texture sharper; larger (e.g. 1.0)
     suits big uniform areas such as sky. propose_alternatives cannot run
@@ -1592,8 +1643,9 @@ async def ai_fill(shape: str = "circle", x: float | None = None, y: float | None
     (like_mask_shapes to take some of its shapes). Not available
     on darktable-api for 5.6 (it needs darktable master, or 5.8 on). Returns the
     instance, name, imgid of the patch photo, file, model, patch box,
-    shape_px (the shape's longest side in pixels), process_ms and, for a
-    large shape, warning."""
+    shape_px (the shape's longest side in pixels), process_ms, for a
+    large shape warning, and with model "flux" bfl (task, cost in credits,
+    seconds)."""
     await _require("ai_fill", "coords")
     if shape == "gradient":
         raise ToolError("a gradient cannot be filled: use circle, ellipse, path or brush")
@@ -1611,7 +1663,7 @@ async def ai_fill(shape: str = "circle", x: float | None = None, y: float | None
     else:
         sh = await _shape_on_raw(shape, x, y, radius, radius_y, rotation, feather, 0.5, points,
                                  width, hardness, density)
-    r = await _ai_fill(None, sh, context, name)
+    r = await _ai_fill(None, sh, context, name, model, prompt)
     if r.get("warning"):
         r["warning"] = f"Tell the user: {r['warning']}"
     return r

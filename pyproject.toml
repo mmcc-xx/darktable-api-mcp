@@ -5,7 +5,7 @@ description = "MCP server that browses a darktable library and edits photos thro
 readme = "README.md"
 license = { text = "GPL-3.0-or-later" }
 requires-python = ">=3.10"
-dependencies = ["mcp>=1.10,<2"]  # 2.x renamed FastMCP
+dependencies = ["mcp>=1.10,<2", "httpx>=0.27"]  # mcp 2.x renamed FastMCP; httpx: online fills
 
 [project.optional-dependencies]
 # find_dust_spots / heal_dust_spots read the raw files
