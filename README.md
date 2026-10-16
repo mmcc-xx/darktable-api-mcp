@@ -159,6 +159,36 @@ Everything else is the same for both branches.
 The AI mask and AI denoise tools need darktable's AI models: download them
 in that darktable's preferences (AI tab).
 
+**AI fill** (`ai_fill`, and the fills in `heal_dust_spots`; the
+`darktable-api` branch only) fills on this machine with an inpainting
+model darktable's preferences don't offer. `make_inpaint_models.py`
+downloads LaMa (~208 MB, the default, better on fine texture such as
+grass) and MI-GAN (smaller, used when LaMa is missing) from Hugging Face,
+checks them and writes them into darktable's models folder:
+
+    cd ~/src/darktable-api-mcp
+    python3 -m venv ~/src/onnx-venv && ~/src/onnx-venv/bin/pip install onnx onnxruntime numpy
+    ~/src/onnx-venv/bin/python -I make_inpaint_models.py ~/.local/share/darktable/models
+
+(`--only lama` or `--only migan` for one of them. If you set
+`plugins/ai/models_path` in darktablerc, use that folder instead.) The
+virtual environment is only needed for this step; delete it afterwards.
+
+`ai_fill` can also fill online, at Black Forest Labs: `model="flux-erase"`
+(FLUX Erase, for removing things; real texture such as fur) or
+`model="flux"` (FLUX.1 Fill, paints what belongs there, guided by a
+`prompt`). Only the crop around the shape is uploaded, and each fill uses
+credits from your BFL account. Make an account and an API key at
+[bfl.ai](https://bfl.ai), then give the MCP server the key, either as
+`BFL_API_KEY` in its environment (`-e BFL_API_KEY=...` in step 4) or in a
+file only you can read:
+
+    mkdir -p ~/.config/darktable-api-mcp
+    (umask 077; printf '%s\n' 'YOUR-KEY' > ~/.config/darktable-api-mcp/bfl_api_key)
+
+Fills stay local unless a FLUX model is asked for; without a key that
+fails with "no Black Forest Labs API key".
+
 **Linux:** darktable run from the build folder can't find ONNX Runtime (it
 loads it by file name), so the AI tools fail until you point the library
 copy at it, with darktable's window closed:
@@ -204,7 +234,7 @@ a server over SSH, with the web app reached through an SSH tunnel
 | `measure_photo` | values at points and in boxes, histograms and clipping of the rendered photo |
 | `zone_map` | the rendered photo reduced to Ansel Adams's eleven print values (zones 0-X, steps of 10 in Lab L), with the share of the photo in each zone, zones at points, and chosen zones marked in red (needs the `[dust]` extra) |
 | `ai_denoise`, `job_status`, `list_jobs`, `cancel_job` | darktable's AI raw denoise as a background job: a new DNG photo beside the original, in its group (needs darktable built with AI) |
-| `ai_fill` | remove an object or blemish: an AI inpainting model (LaMa, or MI-GAN) fills a drawn shape, or the outline of an `add_ai_mask` module (`like_mask_of`), from its surroundings; shown by a new composite instance (non-destructive; needs the inpaint model installed) Small to medium shapes (up to about 1300 px across); larger ones are warned about (a soft smear). In darktable's window too: draw the area as a mask on any module, then `like_mask_of` (`like_mask_shapes` for some of its shapes, by name). Online, `model="flux-erase"` (FLUX Erase, for removals: real texture such as fur) or `"flux"` (FLUX.1 Fill, paints what belongs there, with a `prompt`) at Black Forest Labs: only the crop around the shape is uploaded; needs your BFL key in `BFL_API_KEY` or `~/.config/darktable-api-mcp/bfl_api_key`. darktable-api on master now, the release branch from 5.8 on (not 5.6). |
+| `ai_fill` | remove an object or blemish: an AI inpainting model (LaMa, or MI-GAN) fills a drawn shape, or the outline of an `add_ai_mask` module (`like_mask_of`), from its surroundings; shown by a new composite instance (non-destructive; needs the inpaint model installed: [Quick start](#steps), after step 7) Small to medium shapes (up to about 1300 px across); larger ones are warned about (a soft smear). In darktable's window too: draw the area as a mask on any module, then `like_mask_of` (`like_mask_shapes` for some of its shapes, by name). Online, `model="flux-erase"` (FLUX Erase, for removals: real texture such as fur) or `"flux"` (FLUX.1 Fill, paints what belongs there, with a `prompt`) at Black Forest Labs: only the crop around the shape is uploaded; needs your BFL key in `BFL_API_KEY` or `~/.config/darktable-api-mcp/bfl_api_key`. darktable-api on master now, the release branch from 5.8 on (not 5.6). |
 | `find_dust_spots`, `heal_dust_spots` | sensor dust: a map of dust recurring across the photo's film roll (read from the raw files, cached; small specks and large soft blobs), rated in this photo (raw files that are missing or unreadable are skipped and listed; with too few left the result says the map can't find dust); `this_photo=True` (on by default for a black and white edit) also finds dust in this photo alone, in darktable's render of the current edit (one-off spots, or faint ones a black and white red filter brings out; numbered from 101, with their own crop sheet, healed only when picked by id); heal circles in retouch as one history step (each source kept clear of the dust by the circle's feathered border), or an AI fill (`ai_fill`, darktable master) where no clean source is nearby (`method`: auto, heal, ai_fill), checked at 100% before and after. Needs `pip install 'darktable-api-mcp[dust]'` |
 | `retouch_spots`, `list_retouch_spots`, `edit_retouch_spot`, `remove_retouch_spots` | retouch circles that clone, heal, blur or fill, placed on the photo as shown; move, resize, change or delete them |
 | `list_styles`, `create_style`, `apply_style`, `delete_style` | darktable's styles: make one from a photo's edit, apply one to photos (e.g. one B&W look on a set), as the lighttable does |
@@ -249,7 +279,8 @@ starts in about 3 s on the first call.
    file name): `cmake --install build`, or set `plugins/ai/ort_library_path`
    in the library copy's darktablerc to
    `build/_deps/onnxruntime/lib/libonnxruntime.so.<version>`. The AI models
-   are downloaded from darktable's preferences (AI tab).
+   are downloaded from darktable's preferences (AI tab), except the AI fill
+   models (`make_inpaint_models.py`, after the Quick start's steps).
 2. Python 3.10 or later.
 
 ### Updating the engine
@@ -286,6 +317,7 @@ photos are only read.
 | `DTAPI_SOCKET` | default: `darktable-api.sock` next to the config dir (or `/tmp/darktable-api-<uid>-<hash>.sock` if that path is too long) | where the engine listens; every app using the library must use the same one |
 | `DTAPI_VARIANTS_DIR` | default: `~/.cache/darktable-api-mcp/variants` | where `propose_alternatives` renders the alternatives (the web app serves them from there: set it the same for both) |
 | `DTAPI_FILLS_DIR` | default: unset, a `darktable_fills` folder beside each photo | where `ai_fill` (and `heal_dust_spots`' fills) write their patch TIFFs: set it for a library copy, whose photos are someone's originals |
+| `BFL_API_KEY` | optional; else `~/.config/darktable-api-mcp/bfl_api_key` | your Black Forest Labs key, for `ai_fill`'s online FLUX models only |
 | `DTAPI_GUI_BIN` | default: `darktable` next to `DTAPI_BIN` | the only darktable `takeover_library` may quit |
 
 ### Claude Code
