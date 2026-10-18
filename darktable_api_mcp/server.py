@@ -2493,7 +2493,12 @@ async def list_pickers(operation: str, instance: int = 0) -> dict:
     (picker or button). All of them for the photo in darktable's darkroom,
     with darktable's window serving the library (open_darkroom_photo); on
     any other photo, the pickers that work without the window so far:
-    exposure "exposure", monochrome "highlights"."""
+    exposure "exposure", monochrome "highlights", channelmixerrgb
+    "picker", agx "exposure range/auto tune levels", "white relative
+    exposure", "black relative exposure", "curve/pivot relative exposure",
+    filmicrgb "auto tune levels", "middle gray luminance" (only with
+    custom_grey on, as darktable shows it), "white relative exposure",
+    "black relative exposure"."""
     await _require("picker_list")
     return await _edit(None, "picker_list", operation=operation, instance=instance)
 
@@ -2508,7 +2513,11 @@ async def use_picker(operation: str, control: str, box: dict | None = None, poin
     On other photos (no window needed), list_pickers' pickers work the same
     way: exposure "exposure" brings the area to mid gray (darktable's
     lightness target, 50% by default), monochrome "highlights" sets the
-    filter color from the area (e.g. skin, to lighten it).
+    filter color from the area (e.g. skin, to lighten it), channelmixerrgb
+    "picker" sets white balance (a custom illuminant) that makes the area
+    neutral gray: pick something that should be white or gray. It is
+    refused when the module's adaptation is "none (bypass)" (monochrome
+    raws, a second instance), as darktable hides it then.
     box {left, top, right, bottom} or point [x, y]: fractions 0-1 of the
     photo as shown; without either, darktable's default area (nearly the
     whole photo). Buttons take no area. Returns which settings changed

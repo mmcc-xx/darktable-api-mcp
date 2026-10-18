@@ -24,8 +24,9 @@ translation of it into tool calls and checks.
      pickers and auto buttons work (`list_pickers`, `use_picker`), and
      darktable adjusts related settings after `set_module`
      (`darktable_also_changed`). The user sees every change live.
-   - *Headless*: only exposure's picker so far (`list_pickers` shows
-     which). Measure with `measure_photo` and set values with
+   - *Headless*: the pickers of exposure, monochrome, color calibration
+     (white balance), AgX and filmic rgb so far (`list_pickers` shows
+     which); no auto buttons. Measure with `measure_photo` and set values with
      `set_module`. darktable won't fix related settings for you (see
      each step).
 3. **Read the starting point.** `list_modules` (what's on), `get_history`
@@ -68,9 +69,10 @@ The **white balance** module (`temperature`) stays on camera reference.
 White balance is done in **color calibration** (`channelmixerrgb`), which
 handles highlights and mixed light better.
 
-- Window: `use_picker("channelmixerrgb", "picker", box=<neutral area>)`
-  on something that should be grey or white (wall, shirt, cloud, paper).
-- Headless: `measure_photo(boxes=[<neutral area>])`; a neutral area should
+- `use_picker("channelmixerrgb", "picker", box=<neutral area>)` on
+  something that should be grey or white (wall, shirt, cloud, paper),
+  in the window or headless; then check with `measure_photo`.
+- By hand: `measure_photo(boxes=[<neutral area>])`; a neutral area should
   have Lab a and b near 0. Adjust `temperature` (for a temperature-based
   illuminant) in a few hundred K steps and re-measure. Raising
   `temperature` warms the result (it tells darktable the light was bluer);
@@ -88,10 +90,11 @@ one; never add AgX on top. Don't use base curve for new edits.
 
 - Start from a preset if AgX is fresh: `list_presets("agx")`, e.g.
   "blender-like|base" (neutral) or "blender-like|punchy".
-- Window: `use_picker("agx", "exposure range/auto tune levels")` sets
-  the white and black relative exposure from the photo.
-- Headless: leave `range_white_relative_ev` / `range_black_relative_ev`
-  unless highlights clip in the render (raise white) or shadows are crushed
+- `use_picker("agx", "exposure range/auto tune levels")` (window or
+  headless) sets the white and black relative exposure from the photo
+  (filmic rgb: `use_picker("filmicrgb", "auto tune levels")`). Or by hand:
+  leave `range_white_relative_ev` / `range_black_relative_ev` unless
+  highlights clip in the render (raise white) or shadows are crushed
   (lower black).
 - Then shape the look:
   - `curve_contrast_around_pivot` (contrast; default 3): main global contrast.
