@@ -1117,7 +1117,9 @@ async def save() -> dict:
 
 @mcp.tool()
 async def discard_changes() -> dict:
-    """Throw away unsaved changes: reopen the open photo as saved."""
+    """Throw away unsaved changes: reopen the open photo as saved. Not
+    for the photo open in darktable's darkroom (refused: darktable autosaves
+    that edit itself); undo there with set_history_end."""
     if engine.image_id is None:
         raise ToolError("no photo is open")
     _before.pop(engine.image_id, None)
