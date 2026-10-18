@@ -24,9 +24,9 @@ translation of it into tool calls and checks.
      pickers and auto buttons work (`list_pickers`, `use_picker`), and
      darktable adjusts related settings after `set_module`
      (`darktable_also_changed`). The user sees every change live.
-   - *Headless*: the pickers of exposure, monochrome, color calibration
-     (white balance), AgX and filmic rgb so far (`list_pickers` shows
-     which); no auto buttons. Measure with `measure_photo` and set values with
+   - *Headless*: most pickers (exposure, color calibration, AgX, filmic
+     rgb, levels, color balance rgb, ...; `list_pickers` shows which); no
+     auto buttons. Measure with `measure_photo` and set values with
      `set_module`. darktable won't fix related settings for you (see
      each step).
 3. **Read the starting point.** `list_modules` (what's on), `get_history`

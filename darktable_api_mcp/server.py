@@ -2492,13 +2492,11 @@ async def list_pickers(operation: str, instance: int = 0) -> dict:
     exposure compensation" (its wand), rgblevels "auto levels") and kind
     (picker or button). All of them for the photo in darktable's darkroom,
     with darktable's window serving the library (open_darkroom_photo); on
-    any other photo, the pickers that work without the window so far:
-    exposure "exposure", monochrome "highlights", channelmixerrgb
-    "picker", agx "exposure range/auto tune levels", "white relative
-    exposure", "black relative exposure", "curve/pivot relative exposure",
-    filmicrgb "auto tune levels", "middle gray luminance" (only with
-    custom_grey on, as darktable shows it), "white relative exposure",
-    "black relative exposure"."""
+    any other photo, the pickers that work without the window so far
+    (most of them: exposure, color calibration, agx, filmic rgb, levels,
+    rgb levels, color balance rgb, curves' "create curve", ...; not yet
+    white balance, retouch, color balance). A picker darktable hides in
+    the module's current mode is refused."""
     await _require("picker_list")
     return await _edit(None, "picker_list", operation=operation, instance=instance)
 
