@@ -46,7 +46,7 @@ The engine is shared with the user's web app and darktable's window:
 open_photo joins an edit already open there (unsaved changes included),
 your changes show up live, and save saves the whole edit. If darktable's
 window serves the library, its darkroom photo (library_status:
-darkroom_imgid; open_darkroom_photo) is usually "this photo"; pickers
+darkroom_imgid; open_darkroom_photo) is usually "this photo"; most pickers
 (use_picker) work only on it. While the library is released to darktable's
 GUI, only library_status, acquire_library and takeover_library work. Tell
 the user what you are doing."""
@@ -2490,8 +2490,10 @@ async def list_pickers(operation: str, instance: int = 0) -> dict:
     "exposure range/auto tune levels", channelmixerrgb "picker" (white
     balance from an area), colorbalancergb "white fulcrum", toneequal "mask
     exposure compensation" (its wand), rgblevels "auto levels") and kind
-    (picker or button). Only for the photo in darktable's darkroom, with
-    darktable's window serving the library (open_darkroom_photo)."""
+    (picker or button). All of them for the photo in darktable's darkroom,
+    with darktable's window serving the library (open_darkroom_photo); on
+    any other photo, the pickers that work without the window so far:
+    exposure "exposure", monochrome "highlights"."""
     await _require("picker_list")
     return await _edit(None, "picker_list", operation=operation, instance=instance)
 
@@ -2503,12 +2505,18 @@ async def use_picker(operation: str, control: str, box: dict | None = None, poin
     photo in darktable's darkroom, exactly as clicking it there: darktable
     samples the area and sets the module (e.g. exposure from a midtone area,
     white balance from a neutral area, AgX's levels from the whole photo).
+    On other photos (no window needed), list_pickers' pickers work the same
+    way: exposure "exposure" brings the area to mid gray (darktable's
+    lightness target, 50% by default), monochrome "highlights" sets the
+    filter color from the area (e.g. skin, to lighten it).
     box {left, top, right, bottom} or point [x, y]: fractions 0-1 of the
     photo as shown; without either, darktable's default area (nearly the
     whole photo). Buttons take no area. Returns which settings changed
-    (result.changed). One history step in darktable's history. Runs as a
-    job that ends when darktable has applied it (usually well under a
-    second; the first use may wait for darktable to load the photo)."""
+    (result.changed) and the sample (result.sample: the module's input in
+    the picker's color space, mean/min/max). One history step; switches the
+    module on. Runs as a job that ends when darktable has applied it
+    (usually well under a second; the first use may wait for darktable to
+    load the photo)."""
     await _require("picker_apply")
     params: dict[str, Any] = {"operation": operation, "instance": instance, "control": control}
     if box is not None:

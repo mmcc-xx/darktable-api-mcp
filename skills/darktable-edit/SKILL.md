@@ -24,8 +24,9 @@ translation of it into tool calls and checks.
      pickers and auto buttons work (`list_pickers`, `use_picker`), and
      darktable adjusts related settings after `set_module`
      (`darktable_also_changed`). The user sees every change live.
-   - *Headless*: no pickers. Measure with `measure_photo` and set values
-     with `set_module`. darktable won't fix related settings for you (see
+   - *Headless*: only exposure's picker so far (`list_pickers` shows
+     which). Measure with `measure_photo` and set values with
+     `set_module`. darktable won't fix related settings for you (see
      each step).
 3. **Read the starting point.** `list_modules` (what's on), `get_history`
    (has the user edited it already?), `image_info` (camera, lens, ISO,
@@ -52,8 +53,9 @@ Goal: the main subject (face, central object) at a sensible mid brightness.
 Ignore clipped highlights and black shadows at this point; AgX and tone
 equalizer deal with them.
 
-- Window: `use_picker("exposure", "exposure", box=<subject box>)`.
-- Headless: `measure_photo(boxes=[<subject box>])` and change
+- `use_picker("exposure", "exposure", box=<subject box>)` (window and
+  headless) puts the box at mid gray; then fine-tune by eye.
+- Or `measure_photo(boxes=[<subject box>])` and change
   `exposure` in steps (+1 EV ≈ twice as bright in linear light). A typical
   midtone subject lands around Lab L 50–60 in the render; faces a bit
   brighter, dark subjects (black dog, night) lower. Check `mode` is
