@@ -782,10 +782,13 @@ async def crop_photo(left: float | None = None, top: float | None = None, right:
 
 
 @mcp.tool(structured_output=False)
-async def render_preview(size: int = 1200, uncropped: bool = False, zoom: float | None = None,
+async def render_preview(size: int = 800, uncropped: bool = False, zoom: float | None = None,
                          center_x: float = 0.5, center_y: float = 0.5, history_step: int | None = None) -> Image:
     """darktable's rendering of the open photo with its current (unsaved)
-    edit, fitted inside size x size. Use it to check edits. uncropped=True
+    edit, fitted inside size x size. Use it to check edits. Images are
+    costly (every later request re-reads them): when a number answers the
+    question (a color, a level, clipping, white balance), use measure_photo
+    instead; for detail use zoom, not a bigger size. uncropped=True
     shows the whole photo without the crop module's crop (still oriented
     and straightened), the frame crop_photo's fractions refer to.
 
@@ -856,7 +859,7 @@ async def mark_before() -> dict:
 
 
 @mcp.tool(structured_output=False)
-async def compare_before_after(before_step: int | None = None, show_user: bool = True, size: int = 900) -> list:
+async def compare_before_after(before_step: int | None = None, show_user: bool = True, size: int = 640) -> list:
     """Before and after of the open photo: both renders (before first) for
     you to judge, and with show_user the comparison in front of the user:
     the web app's photo page shows a before/after slider, and if the photo
@@ -939,7 +942,7 @@ def _steps(changes: list[dict]) -> list[dict]:
 
 
 @mcp.tool(structured_output=False)
-async def propose_alternatives(alternatives: list[dict], size: int = 800, show_user: bool = True) -> list:
+async def propose_alternatives(alternatives: list[dict], size: int = 640, show_user: bool = True) -> list:
     """Render alternative versions of the open photo for the user to choose
     from, without changing the edit: different crops, black and white
     filters, looks, ... Each is applied to a copy of the current edit,

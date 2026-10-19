@@ -25,7 +25,7 @@ changing it), `image_info`, `get_history`, `list_modules`, `get_module`,
    photo"; a number is a library id).
 2. `image_info`: camera, lens, ISO, aperture, shutter, focal length.
    `get_history` and `list_modules`: is there an edit, what does it use.
-3. Look: `render_preview(size=1200)` (as edited) and
+3. Look: `render_preview()` (as edited) and
    `render_preview(history_step=0)` (the original, for what the edit did).
 4. Measure: `measure_photo` with boxes on the subject, the brightest and
    darkest important areas, and something that should be neutral; read

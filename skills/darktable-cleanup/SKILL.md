@@ -17,7 +17,7 @@ follow darktable-edit. This skill covers the defects you see at 100%.
 
 Defects hide at whole-photo size. Before changing anything:
 
-1. `render_preview(size=1200)` for the whole photo; note plain areas (sky,
+1. `render_preview()` for the whole photo; note plain areas (sky,
    water, walls, skin) and dark areas.
 2. `render_preview(zoom=1, center_x, center_y, size=600)` on:
    - the subject (sharpness, noise on it);
