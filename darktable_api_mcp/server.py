@@ -2492,11 +2492,11 @@ async def list_pickers(operation: str, instance: int = 0) -> dict:
     exposure compensation" (its wand), rgblevels "auto levels") and kind
     (picker or button). All of them for the photo in darktable's darkroom,
     with darktable's window serving the library (open_darkroom_photo); on
-    any other photo, the pickers that work without the window so far
-    (most of them: exposure, white balance, color calibration, agx, filmic
-    rgb, levels, rgb levels, color balance rgb, color balance, spektrafilm,
-    curves' "create curve", retouch's fill color, invert, ...). A picker
-    darktable hides in the module's current mode is refused."""
+    any other photo, all the pickers (exposure, white balance, color
+    calibration, agx, filmic rgb, levels, rgb levels, color balance rgb,
+    color balance, spektrafilm, color harmonizer, curves' "create curve",
+    retouch's fill color, invert, ...); auto buttons need the window. A
+    picker darktable hides in the module's current mode is refused."""
     await _require("picker_list")
     return await _edit(None, "picker_list", operation=operation, instance=instance)
 
@@ -2529,6 +2529,9 @@ async def use_picker(operation: str, control: str, box: dict | None = None, poin
     and "post-compression scale" set the factor that puts the area's
     brightest tone near white through the film simulation (refused when
     its data pack isn't installed: darktable's window offers the download).
+    colorharmonizer "anchor hue" sets the harmony's key hue from the area;
+    with the "custom" rule "custom hue 1" to "custom hue 4" set each node's
+    hue instead (up to its "nodes" count).
     box {left, top, right, bottom} or point [x, y]: fractions 0-1 of the
     photo as shown; without either, darktable's default area (nearly the
     whole photo). Buttons take no area. Returns which settings changed
