@@ -120,13 +120,20 @@ async def list_film_rolls() -> dict:
 
 @mcp.tool()
 async def list_images(film_roll_id: int | None = None, rating: str = "visible",
-                      label: str | None = None, offset: int = 0, limit: int = 50) -> dict:
+                      label: str | None = None, tag: str | None = None, offset: int = 0,
+                      limit: int = 50) -> dict:
     """Photos in folder/filename order: id, filename, folder, rating,
     rejected, color labels (0 red .. 4 purple), size, history_end (0 =
     unedited). film_roll_id: omit for all. rating: "visible" (default:
     not rejected), "all", "rejected", or "1".."5" (at least). label: a
-    color name. offset, limit (up to 1000); "total" is the full count."""
-    return await _call("images_list", offset=offset, limit=limit, **_filters(film_roll_id, rating, label))
+    color name. tag: only photos with that tag or one under it ("places"
+    also takes "places|paris"; case ignored; list_tags names them).
+    offset, limit (up to 1000); "total" is the full count."""
+    extra = {}
+    if tag:
+        await _require("images_list.tag")
+        extra["tag"] = tag
+    return await _call("images_list", offset=offset, limit=limit, **_filters(film_roll_id, rating, label), **extra)
 
 
 @mcp.tool()
