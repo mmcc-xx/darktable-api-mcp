@@ -24,7 +24,7 @@ from .engine import EngineError, engine
 INSTRUCTIONS = """\
 Edits photos in a darktable library through darktable-api (a headless
 darktable). Flow: open_photo(id) -> get_module (setting names, ranges,
-dropdown values) -> set_module, checking render_preview -> save. Edits stay
+dropdown values) -> set_module(..., preview=True) -> save. Edits stay
 in memory until save; discard_changes reopens the saved state. "Photo 36"
 means library id 36. One photo is current at a time (the last open_photo).
 
@@ -452,6 +452,23 @@ async def open_darkroom_photo() -> dict:
     return await open_photo(st["darkroom_imgid"])
 
 
+async def _and_look(reply: dict, preview: bool | dict, measure: dict | None) -> dict | list:
+    """An edit tool's reply, with render_preview's image (preview: True or
+    its arguments) and measure_photo's readout (measure: its arguments)
+    after it: the edit and a look at it in one call."""
+    if not preview and not measure:
+        return reply
+    out: list = [reply]
+    try:
+        if measure:
+            out.append({"measure": await measure_photo(**measure)})
+        if preview:
+            out.append(await render_preview(**(preview if isinstance(preview, dict) else {})))
+    except (TypeError, ToolError) as exc:
+        out.append(f"the edit is done; the look failed: {exc}")
+    return out
+
+
 @mcp.tool()
 async def list_modules() -> dict:
     """The open photo's modules in pipeline order: operation (e.g. exposure,
@@ -471,18 +488,23 @@ async def get_module(operation: str, instance: int = 0) -> dict:
     return await _edit(None, "module_get", operation=operation, instance=instance)
 
 
-@mcp.tool()
-async def set_module(operation: str, values: dict[str, Any], instance: int = 0) -> dict:
+@mcp.tool(structured_output=False)
+async def set_module(operation: str, values: dict[str, Any], instance: int = 0,
+                     preview: bool | dict = False, measure: dict | None = None) -> dict | list:
     """Change a module's settings on the open photo, e.g.
     set_module("exposure", {"exposure": 0.7}). Names and ranges from
     get_module; dropdowns by name, label or number; list settings whole or
     one element ({"grey[1]": 0.6}). One bad value changes nothing.
     Switches the module on, one history step, not saved until save.
     darktable adjusts related settings as when a control is moved
-    (darktable_also_changed in the reply)."""
+    (darktable_also_changed in the reply).
+    preview=True (or render_preview's arguments, {"zoom": 1}) and
+    measure={measure_photo's arguments} add the render and readout: no
+    separate call to look."""
     if any("[" in k or isinstance(v, list) for k, v in values.items()):
         await _require("module_set.lists")
-    return await _edit(None, "module_set", operation=operation, values=values, instance=instance)
+    return await _and_look(await _edit(None, "module_set", operation=operation, values=values, instance=instance),
+                           preview, measure)
 
 
 @mcp.tool()
@@ -493,20 +515,25 @@ async def list_presets(operation: str, instance: int = 0) -> dict:
     return await _edit(None, "preset_list", operation=operation, instance=instance)
 
 
-@mcp.tool()
-async def apply_preset(operation: str, name: str, instance: int = 0) -> dict:
+@mcp.tool(structured_output=False)
+async def apply_preset(operation: str, name: str, instance: int = 0,
+                       preview: bool | dict = False, measure: dict | None = None) -> dict | list:
     """Apply a module preset on the open photo, as darktable's presets menu
     does: the preset's settings, on/off and blending replace the module's,
     as one history step. name: from list_presets (name or label). Not saved
-    until save."""
+    until save. preview, measure as set_module."""
     await _require("preset_apply")
-    return await _edit(None, "preset_apply", operation=operation, name=name, instance=instance)
+    return await _and_look(await _edit(None, "preset_apply", operation=operation, name=name, instance=instance),
+                           preview, measure)
 
 
-@mcp.tool()
-async def enable_module(operation: str, enabled: bool, instance: int = 0) -> dict:
-    """Turn a module on or off on the open photo (keeps its settings)."""
-    return await _edit(None, "module_enable", operation=operation, enabled=enabled, instance=instance)
+@mcp.tool(structured_output=False)
+async def enable_module(operation: str, enabled: bool, instance: int = 0,
+                        preview: bool | dict = False, measure: dict | None = None) -> dict | list:
+    """Turn a module on or off on the open photo (keeps its settings).
+    preview, measure as set_module."""
+    return await _and_look(await _edit(None, "module_enable", operation=operation, enabled=enabled,
+                                       instance=instance), preview, measure)
 
 
 @mcp.tool()
@@ -543,21 +570,23 @@ async def get_curve(operation: str, instance: int = 0) -> dict:
     return await _edit(None, "curve_get", operation=operation, instance=instance)
 
 
-@mcp.tool()
+@mcp.tool(structured_output=False)
 async def set_curve(operation: str, points: list[list[float]], channel: str | None = None,
-                    type: str | None = None, instance: int = 0) -> dict:
+                    type: str | None = None, instance: int = 0,
+                    preview: bool | dict = False, measure: dict | None = None) -> dict | list:
     """Set one channel's curve of rgbcurve, tonecurve, colorzones or
     basecurve: points [[x, y], ...] in 0..1, x increasing (2-20). channel
     as get_curve lists them (default the first). type: "cubic spline",
     "centripetal spline", "monotonic spline". Switches the module on, one
-    history step. rgbcurve is scene-linear: middle gray is near x = 0.18."""
+    history step. rgbcurve is scene-linear: middle gray is near x = 0.18.
+    preview, measure as set_module."""
     await _require("curve_set")
     params: dict[str, Any] = {"operation": operation, "instance": instance, "points": points}
     if channel is not None:
         params["channel"] = channel
     if type is not None:
         params["type"] = type
-    return await _edit(None, "curve_set", **params)
+    return await _and_look(await _edit(None, "curve_set", **params), preview, measure)
 
 
 @mcp.tool()
@@ -680,20 +709,21 @@ async def rotate_photo(degrees: int = 0, angle: float | None = None, mirror: str
     return await _edit(None, "geometry_set", **params)
 
 
-@mcp.tool()
+@mcp.tool(structured_output=False)
 async def crop_photo(left: float | None = None, top: float | None = None, right: float | None = None,
-                     bottom: float | None = None, aspect: str | None = None, remove: bool = False) -> dict:
+                     bottom: float | None = None, aspect: str | None = None, remove: bool = False,
+                     preview: bool | dict = False, measure: dict | None = None) -> dict | list:
     """Crop the open photo (crop module). left, top, right, bottom: edges as
     fractions of the uncropped photo (render_preview(uncropped=True));
     all four, or none to reshape the current crop with aspect. aspect:
     "free", "original", "square" or "W:H" ("3:2", "2:3" portrait), the
     largest such box centered in the given one. remove: no crop. Returns
-    the geometry. Not saved until save."""
+    the geometry. Not saved until save. preview, measure as set_module."""
     edges = [left, top, right, bottom]
     if remove:
         if any(e is not None for e in edges) or aspect:
             raise ToolError("remove=True takes no edges or aspect")
-        return await _edit(None, "geometry_set", crop=None)
+        return await _and_look(await _edit(None, "geometry_set", crop=None), preview, measure)
     params: dict[str, Any] = {}
     if any(e is not None for e in edges):
         if any(e is None for e in edges):
@@ -703,7 +733,7 @@ async def crop_photo(left: float | None = None, top: float | None = None, right:
         params["aspect"] = aspect
     if not params:
         raise ToolError("give the crop's edges, an aspect, or remove=True")
-    return await _edit(None, "geometry_set", **params)
+    return await _and_look(await _edit(None, "geometry_set", **params), preview, measure)
 
 
 @mcp.tool(structured_output=False)
@@ -1142,8 +1172,9 @@ async def get_blending(operation: str, instance: int = 0) -> dict:
     return await _edit(None, "blend_get", operation=operation, instance=instance)
 
 
-@mcp.tool()
-async def set_blending(operation: str, values: dict[str, Any], instance: int = 0) -> dict:
+@mcp.tool(structured_output=False)
+async def set_blending(operation: str, values: dict[str, Any], instance: int = 0,
+                       preview: bool | dict = False, measure: dict | None = None) -> dict | list:
     """Change a module's blending as one history step (all or nothing).
     values (as get_blending): masks, blend_mode, reverse, opacity (0-100),
     blend_parameter, feathering_radius (0-250), blur_radius (0-100),
@@ -1156,9 +1187,10 @@ async def set_blending(operation: str, values: dict[str, Any], instance: int = 0
     modules (18 = middle gray, 9 = -1 EV), e.g. denoise only the shadows:
     set_blending("denoiseprofile", {"parametric": {"g_in": {"range": [0, 0, 6, 13]}}}).
     Ranges apply to this module's input, not the render: check with
-    render_preview(zoom=...)."""
+    render_preview(zoom=...) or preview, measure as set_module."""
     await _require("blend_set")
-    return await _edit(None, "blend_set", operation=operation, values=values, instance=instance)
+    return await _and_look(await _edit(None, "blend_set", operation=operation, values=values, instance=instance),
+                           preview, measure)
 
 
 async def _photo_to_raw(points: list[list[float]]) -> tuple[list[list[float]], int, int]:

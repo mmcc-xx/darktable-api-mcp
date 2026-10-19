@@ -181,11 +181,16 @@ contrast. Use it for sky vs. foreground, backlit faces, deep shadows.
 
 ## Checking your work
 
-- After each step: `render_preview` (the whole photo) and say in a sentence
-  what changed. For noise, sharpness and fine detail: `render_preview(zoom=1,
-  center_x, center_y)` on the subject.
+- After each step, look at the whole photo and say in a sentence what
+  changed. For noise, sharpness and fine detail, zoom in on the subject
+  (`{"zoom": 1, "center_x": ..., "center_y": ...}`).
 - Numbers back up your eyes: `measure_photo` for the subject's brightness,
   neutral areas, and the clipped fractions.
+- Look in the same call as the edit: `set_module`, `set_blending`,
+  `enable_module`, `apply_preset`, `set_curve` and `crop_photo` take
+  `preview=True` (or render_preview's arguments) and `measure={...}`
+  (measure_photo's), and return the render and readout with the reply. A
+  separate `render_preview` costs a whole extra request.
 - Before/after: `render_preview(history_step=0)` shows the original.
 - If a step made things worse, `set_history_end` back, or set the value
   back; don't stack corrections on top of a mistake.
