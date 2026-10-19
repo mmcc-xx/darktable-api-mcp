@@ -2493,10 +2493,10 @@ async def list_pickers(operation: str, instance: int = 0) -> dict:
     (picker or button). All of them for the photo in darktable's darkroom,
     with darktable's window serving the library (open_darkroom_photo); on
     any other photo, the pickers that work without the window so far
-    (most of them: exposure, color calibration, agx, filmic rgb, levels,
-    rgb levels, color balance rgb, curves' "create curve", ...; not yet
-    white balance, retouch, color balance). A picker darktable hides in
-    the module's current mode is refused."""
+    (most of them: exposure, white balance, color calibration, agx, filmic
+    rgb, levels, rgb levels, color balance rgb, curves' "create curve",
+    retouch's fill color, invert, ...; not yet color balance). A picker
+    darktable hides in the module's current mode is refused."""
     await _require("picker_list")
     return await _edit(None, "picker_list", operation=operation, instance=instance)
 
@@ -2515,12 +2515,19 @@ async def use_picker(operation: str, control: str, box: dict | None = None, poin
     "picker" sets white balance (a custom illuminant) that makes the area
     neutral gray: pick something that should be white or gray. It is
     refused when the module's adaptation is "none (bypass)" (monochrome
-    raws, a second instance), as darktable hides it then.
+    raws, a second instance), as darktable hides it then. temperature
+    "settings/from image area" sets the white balance module's
+    coefficients (preset "from image area") from the raw: in the
+    scene-referred workflow white balance belongs in color calibration, so
+    prefer channelmixerrgb "picker" unless the user asks for this module.
+    retouch "pick fill color" takes the fill color for new fill spots from
+    the module's output (use a point).
     box {left, top, right, bottom} or point [x, y]: fractions 0-1 of the
     photo as shown; without either, darktable's default area (nearly the
     whole photo). Buttons take no area. Returns which settings changed
     (result.changed) and the sample (result.sample: the module's input in
-    the picker's color space, mean/min/max). One history step; switches the
+    the picker's color space, mean/min/max; result.output_sample: the
+    module's output, for retouch's fill color). One history step; switches the
     module on. Runs as a job that ends when darktable has applied it
     (usually well under a second; the first use may wait for darktable to
     load the photo)."""
