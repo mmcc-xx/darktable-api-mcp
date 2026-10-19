@@ -2494,8 +2494,8 @@ async def list_pickers(operation: str, instance: int = 0) -> dict:
     with darktable's window serving the library (open_darkroom_photo); on
     any other photo, the pickers that work without the window so far
     (most of them: exposure, white balance, color calibration, agx, filmic
-    rgb, levels, rgb levels, color balance rgb, curves' "create curve",
-    retouch's fill color, invert, ...; not yet color balance). A picker
+    rgb, levels, rgb levels, color balance rgb, color balance, curves'
+    "create curve", retouch's fill color, invert, ...). A picker
     darktable hides in the module's current mode is refused."""
     await _require("picker_list")
     return await _edit(None, "picker_list", operation=operation, instance=instance)
@@ -2521,7 +2521,11 @@ async def use_picker(operation: str, control: str, box: dict | None = None, poin
     scene-referred workflow white balance belongs in color calibration, so
     prefer channelmixerrgb "picker" unless the user asks for this module.
     retouch "pick fill color" takes the fill color for new fill spots from
-    the module's output (use a point).
+    the module's output (use a point). colorbalance (the older color
+    balance): its factor and hue pickers set one range from the area and
+    remember it; "optimize luma" and "neutralize colors" (slope, offset,
+    power mode) then fit to those remembered areas, picking the rest from
+    their own area, as in darktable.
     box {left, top, right, bottom} or point [x, y]: fractions 0-1 of the
     photo as shown; without either, darktable's default area (nearly the
     whole photo). Buttons take no area. Returns which settings changed
