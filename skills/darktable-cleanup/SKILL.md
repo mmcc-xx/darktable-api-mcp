@@ -105,6 +105,49 @@ shorter side (0.005–0.01 for a speck, 0.02–0.04 for a dust blob).
   circles, or ask the user; this is slow work with circles and may look
   worse than leaving it.
 
+### Removing objects: AI fill
+
+For an object circles can't cover (a sign, a person in the distance, a
+tail, a wire): `ai_fill` fills a shape from its surroundings, as a
+composite instance you can switch off or remove.
+
+- **Outline**: a few pixels beyond the object, feather ~0.01. For an
+  irregular object, outline it with `add_ai_mask` on a spare module, then
+  `ai_fill(like_mask_of=that module)` and remove the helper mask. In
+  darktable's window the user can draw the mask themselves on any module
+  (e.g. a spare exposure instance): `like_mask_of` it, `like_mask_shapes`
+  for some of its shapes. A shape with a small core and a wide feather
+  leaves the object partly showing.
+- **Size**: shapes up to ~1300 px across at full size (about a fifth of
+  the shorter side) fill with believable texture. Larger ones (a main
+  subject) come out as a soft, flat smear: tell the user first that it
+  will likely not look right.
+- **context** (0.25–4, default 0.5): smaller keeps texture sharper;
+  ~1.0 for large even areas such as sky.
+- **Models**. `"local"` (LaMa, default): free, seconds, smooth on fur,
+  hair and fine detail. Online at Black Forest Labs, only when the user
+  asked or agreed to send crops (the crop around the shape is uploaded;
+  cents and 10–30 s a fill; the key in `BFL_API_KEY` or
+  `~/.config/darktable-api-mcp/bfl_api_key`):
+  - `"flux-erase"`: removes small to medium objects within texture with
+    no trace; on large areas its patch shows (a look of its own).
+  - `"flux"` (FLUX.1 Fill [pro]): for large areas and backgrounds, with a
+    prompt describing the scene ("an empty field of tall dry grass"). It
+    may paint something unwanted; negatives ("no eye") don't work.
+  - `"flux3"`: an instruction, prompt naming what to remove ("the ring of
+    stones"); like flux-erase but slower (~30 s) and dearer; try it where
+    flux-erase leaves a trace.
+  Online fills are color matched to the photo and made at `online_size`
+  (default 1024, up to 2048): a larger crop comes back softer;
+  `upscale=True` runs it through darktable's AI upscaler first (sharper,
+  invented detail).
+- **Choosing**: FLUX differs from run to run, and `propose_alternatives`
+  can't run fills: make two or three fills (or two contexts), compare
+  each at `render_preview(zoom=1)`, and `remove_module_instance` the
+  worse ones.
+- Show a `"warning"` from the reply to the user as it is, and check the
+  fill with them at 100%.
+
 ## 3. Noise
 
 Judge it at 100% on the subject and in the shadows, after the main edit

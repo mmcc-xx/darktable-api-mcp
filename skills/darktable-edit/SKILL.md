@@ -21,15 +21,14 @@ translation of it into tool calls and checks.
    these don't settle it.
 2. **Know where you are running.**
    - *darktable's window serves the library* (the photo is in its darkroom):
-     pickers and auto buttons work (`list_pickers`, `use_picker`), and
-     darktable adjusts related settings after `set_module`
-     (`darktable_also_changed`). The user sees every change live.
-   - *Headless*: most pickers (exposure, white balance, color
+     pickers and auto buttons work (`list_pickers`, `use_picker`). The
+     user sees every change live.
+   - *Headless*: the pickers (exposure, white balance, color
      calibration, AgX, filmic rgb, levels, color balance rgb, retouch's
-     fill color, ...; `list_pickers` shows which); no
-     auto buttons. Measure with `measure_photo` and set values with
-     `set_module`. darktable won't fix related settings for you (see
-     each step).
+     fill color, ...; `list_pickers` shows which); no auto buttons.
+     Measure with `measure_photo` and set values with `set_module`.
+   In both, darktable adjusts related settings after `set_module` as when
+   a control is moved (`darktable_also_changed` in the reply).
 3. **Read the starting point.** `list_modules` (what's on), `get_history`
    (has the user edited it already?), `image_info` (camera, lens, ISO,
    exposure), and look at `render_preview`. If the photo already has an
@@ -162,6 +161,23 @@ contrast. Use it for sky vs. foreground, backlit faces, deep shadows.
   (gray is linear: 18 = middle gray, 9 = -1 EV).
   Or `ai_denoise` for a cleaner raw (makes a new photo). Denoise before
   sharpening.
+
+**Less common pickers** (`use_picker`):
+- `temperature` "settings/from image area" sets the white balance
+  module's coefficients from the raw; white balance belongs in color
+  calibration (`channelmixerrgb` "picker"), so use it only when asked.
+- `channelmixerrgb` "picker" is refused when adaptation is "none
+  (bypass)" (monochrome raws, a second instance): darktable hides it.
+- `retouch` "pick fill color": the fill color for new fill spots, from
+  the module's output (use a point).
+- `colorbalance` (the older color balance): its factor and hue pickers
+  set one range from the area and remember it; "optimize luma" and
+  "neutralize colors" then fit to the remembered areas.
+- `spektrafilm` "pre-compression boost" / "post-compression scale": put
+  the area's brightest tone near white through the film simulation
+  (needs its data pack; darktable's window offers the download).
+- `colorharmonizer` "anchor hue": the harmony's key hue from the area;
+  with the "custom" rule, "custom hue 1".."custom hue 4" set each node.
 
 ## Checking your work
 

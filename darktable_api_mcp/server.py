@@ -121,16 +121,11 @@ async def list_film_rolls() -> dict:
 @mcp.tool()
 async def list_images(film_roll_id: int | None = None, rating: str = "visible",
                       label: str | None = None, offset: int = 0, limit: int = 50) -> dict:
-    """Photos in folder/filename order, with id, filename, folder, rating
-    (0-5), rejected, color labels (0 red, 1 yellow, 2 green, 3 blue, 4 purple),
-    size and history_end (0 = unedited).
-
-    film_roll_id: from list_film_rolls; omit for all.
-    rating: "visible" (not rejected, default; rejected photos are left
-            out), "all", "rejected", or "1".."5"
-            (at least that many stars).
-    label: "red", "yellow", "green", "blue" or "purple" to filter by label.
-    offset, limit: paging (limit up to 1000); "total" is the full count."""
+    """Photos in folder/filename order: id, filename, folder, rating,
+    rejected, color labels (0 red .. 4 purple), size, history_end (0 =
+    unedited). film_roll_id: omit for all. rating: "visible" (default:
+    not rejected), "all", "rejected", or "1".."5" (at least). label: a
+    color name. offset, limit (up to 1000); "total" is the full count."""
     return await _call("images_list", offset=offset, limit=limit, **_filters(film_roll_id, rating, label))
 
 
@@ -156,17 +151,12 @@ async def get_thumbnail(image_id: int, size: int = 512) -> Image:
 async def make_thumbnails(image_ids: list[int] | None = None, film_roll_id: int | None = None,
                           whole_library: bool = False, size: int = 720, outdated_only: bool = True,
                           wait: bool = True, timeout_s: int = 1800) -> dict:
-    """Make darktable thumbnails in bulk (as darktable-generate-cache does):
-    rendered with each photo's saved edit and written to darktable's disk
-    cache, so darktable's lighttable, the web app's grid, get_thumbnail and
-    photo_sheet show them at once. Give image_ids, a film_roll_id, or
-    whole_library=True. outdated_only (default) skips photos whose
-    thumbnails are on disk and match their edit. size: the largest
-    thumbnail needed (pixels).
-
-    A background job (about 0.2-1 s a photo): wait=True waits for it
-    (result: generated, skipped, failed); wait=False returns the job at
-    once (job_status, cancel_job)."""
+    """Make darktable's thumbnails in bulk, from each photo's saved edit,
+    into darktable's disk cache (for the lighttable, web app,
+    get_thumbnail, photo_sheet). image_ids, film_roll_id or
+    whole_library=True; outdated_only (default) skips current ones; size:
+    the largest needed. A job (0.2-1 s a photo): wait=True returns
+    generated, skipped, failed."""
     await _require("thumbnails")
     params: dict[str, Any] = {"size": max(64, min(size, 4096)), "outdated_only": outdated_only}
     if image_ids:
@@ -182,28 +172,14 @@ async def make_thumbnails(image_ids: list[int] | None = None, film_roll_id: int 
 async def import_photos(paths: list[str], copy: bool = False, recursive: bool = False,
                         jobcode: str | None = None, skip_existing: bool = True, wait: bool = True,
                         timeout_s: int = 1800) -> dict:
-    """Import photos into the darktable library, as darktable's import does.
-    paths: files or folders on the machine darktable runs on (a folder
-    takes the photos in it; recursive=True also its subfolders, e.g. a
-    card's DCIM).
-
-    copy=False adds the files where they are ("add to library"): for photos
-    already in their final place. copy=True copies them into the folders
-    darktable's import settings name ("copy & import", by default
-    ~/Pictures/Darktable/<date>_<jobcode>) and renames them by its file
-    name pattern: for a memory card or a download folder. jobcode names
-    that folder (default: darktable's last one). Ask the user which, and
-    for a jobcode, when it isn't clear.
-
-    skip_existing (default) leaves out photos already in the library (same
-    file, the id darktable's copy & import stores, or the same file name
-    and capture time), so importing a card again brings only what's new.
-    darktable's "ignore non-raws" preference is followed.
-
-    A background job: wait=True waits for it; the result lists imported
-    (image ids and files), skipped (with the photo already there) and
-    failed (with why), and the film_ids they went into. Afterwards
-    make_thumbnails(film_roll_id=...) prepares their thumbnails."""
+    """Import photos, as darktable's import does. paths: files or folders on
+    darktable's machine (recursive=True: subfolders too). copy=False adds
+    them where they are; copy=True copies and renames them into
+    darktable's import folders (jobcode names the folder), for a card or
+    downloads: ask which when it isn't clear. skip_existing (default)
+    leaves out photos already in the library. A job: wait=True returns
+    imported, skipped, failed and film_ids; then
+    make_thumbnails(film_roll_id=...)."""
     await _require("import")
     if not paths:
         raise ToolError("give paths: the files or folders to import")
@@ -302,18 +278,12 @@ def _sheet_line(img: dict, info: dict, md: dict) -> str:
 async def photo_sheet(image_ids: list[int] | None = None, film_roll_id: int | None = None,
                       rating: str = "visible", untagged_only: bool = False, offset: int = 0,
                       limit: int = 12, size: int = 384) -> list:
-    """Look at many photos at once, for tagging them by content (or culling,
-    finding a subject): each photo's thumbnail with a line giving its id,
-    filename, date, camera and lens, location, title and current tags. Give
-    image_ids, or page through a film roll (film_roll_id; omit for the whole
-    library) with offset/limit (up to 24 a page); the first line says where
-    the next page starts. untagged_only skips photos that already have tags
-    of their own (darktable's own "darktable|..." tags don't count).
-
-    Auto-tagging: list_tags first and reuse the library's existing tags and
-    hierarchy (e.g. "places|usa|washington", "animals|mammals|prairie dog");
-    make_thumbnails for the roll first makes the pages fast; then
-    tag_photos with what you see on each page."""
+    """Many photos at once, for tagging, culling or finding a subject: each
+    thumbnail with its id, file name, date, camera, lens, location, title
+    and tags. image_ids, or a film_roll_id (omit: the whole library) with
+    offset/limit (up to 24 a page). untagged_only skips photos with tags of
+    their own. To tag: list_tags first and reuse its hierarchy,
+    make_thumbnails first for speed, then tag_photos."""
     await _require("image_metadata")
     limit = max(1, min(limit, 24))
     size = max(128, min(size, 768))
@@ -416,13 +386,11 @@ async def set_location(latitude: float | None = None, longitude: float | None = 
 
 @mcp.tool()
 async def open_photo(image_id: int, discard_unsaved: bool = False) -> dict:
-    """Open a photo for editing and make it the current photo for the editing
-    tools; lists its modules and history. If the photo is already open (by
-    you earlier, or by the user in another app), this joins that edit with its
-    unsaved changes ("unsaved": true); discard_unsaved=True reloads it as
-    saved instead, dropping those changes for everyone (ask the user first).
-    Photos you opened before stay open, with their unsaved changes, until
-    saved; the engine keeps a few open at once."""
+    """Open a photo for editing and make it the current photo; lists its
+    modules and history. A photo already open (by you, or by the user in
+    another app) is joined with its unsaved changes ("unsaved": true);
+    discard_unsaved=True reloads it as saved, dropping those changes for
+    everyone (ask the user first)."""
     try:
         opened = await engine.open(image_id, fresh=discard_unsaved)
         mods = await engine.edit(image_id, "module_list")
@@ -505,19 +473,13 @@ async def get_module(operation: str, instance: int = 0) -> dict:
 
 @mcp.tool()
 async def set_module(operation: str, values: dict[str, Any], instance: int = 0) -> dict:
-    """Change settings of a module on the open photo, e.g.
-    set_module("exposure", {"exposure": 0.7}). Names and ranges come from
-    get_module; dropdown values by name, label or number. List settings
-    whole, as nested lists of their shape ({"grey": [0.3, 0.6, 0.1, 0]}), or
-    one element by index ({"grey[1]": 0.6}, {"x[0][3]": 0.5}). All values
-    are checked first: one bad value changes nothing. Turns the module on and
-    adds a history step, as darktable's darkroom does. Not saved until save.
-    On the photo in darktable's darkroom, darktable then adjusts related
-    settings as it does when a control is moved (e.g. AgX keeps its pivot,
-    exposure keeps black below white); darktable_also_changed in the reply
-    lists them. Headless (no darktable window) that doesn't happen: check
-    related settings yourself (e.g. exposure's mode must be manual for
-    exposure to apply)."""
+    """Change a module's settings on the open photo, e.g.
+    set_module("exposure", {"exposure": 0.7}). Names and ranges from
+    get_module; dropdowns by name, label or number; list settings whole or
+    one element ({"grey[1]": 0.6}). One bad value changes nothing.
+    Switches the module on, one history step, not saved until save.
+    darktable adjusts related settings as when a control is moved
+    (darktable_also_changed in the reply)."""
     if any("[" in k or isinstance(v, list) for k, v in values.items()):
         await _require("module_set.lists")
     return await _edit(None, "module_set", operation=operation, values=values, instance=instance)
@@ -525,12 +487,8 @@ async def set_module(operation: str, values: dict[str, Any], instance: int = 0) 
 
 @mcp.tool()
 async def list_presets(operation: str, instance: int = 0) -> dict:
-    """A module's presets, as its presets menu lists them: name (pass it to
-    apply_preset), label (as darktable shows it, also accepted), builtin,
-    autoapply. E.g. channelmixerrgb (color calibration) has "monochrome |
-    luminance-based" and film-emulation B&W mixes (apply them to a new
-    instance: they switch its white balance off); denoiseprofile has
-    "wavelets: chroma only"."""
+    """A module's presets as its presets menu lists them: name (for
+    apply_preset), label (also accepted), builtin, autoapply."""
     await _require("preset_list")
     return await _edit(None, "preset_list", operation=operation, instance=instance)
 
@@ -553,12 +511,10 @@ async def enable_module(operation: str, enabled: bool, instance: int = 0) -> dic
 
 @mcp.tool()
 async def add_module_instance(operation: str, instance: int = 0, copy: bool = False) -> dict:
-    """Add another instance of a module after the given one in the pipe, as
-    the module's "new instance" (copy=False: default settings) or
-    "duplicate" (copy=True: its settings and blending) does. Returns the new
-    instance number for get_module/set_module/... (instance=...). E.g. a
-    second channelmixerrgb for creative monochrome, a second denoiseprofile
-    for a separate chroma pass. One history step."""
+    """Add another instance of a module after the given one, as its "new
+    instance" (copy=False: defaults) or "duplicate" (copy=True: its
+    settings and blending) does, as one history step. Returns the new
+    instance number (instance=... in other tools)."""
     await _require("module_add")
     return await _edit(None, "module_add", operation=operation, instance=instance, copy=copy)
 
@@ -566,11 +522,9 @@ async def add_module_instance(operation: str, instance: int = 0, copy: bool = Fa
 @mcp.tool()
 async def move_module(operation: str, instance: int = 0, after: str | None = None, after_instance: int = 0,
                       before: str | None = None, before_instance: int = 0) -> dict:
-    """Move a module (instance) in the pipe, right after or before another,
-    as dragging it in darktable's darkroom does. darktable's rules apply
-    (some modules can't move). Typical: a second color calibration for
-    creative B&W goes after the tone mapper: move_module("channelmixerrgb",
-    1, after="agx"). Returns its new position (iop_order)."""
+    """Move a module instance right after or before another in the pipe, as
+    dragging it in the darkroom (darktable's rules apply), e.g.
+    move_module("channelmixerrgb", 1, after="agx"). Returns its iop_order."""
     await _require("module_move")
     if (after is None) == (before is None):
         raise ToolError("give after=<operation> or before=<operation>")
@@ -592,13 +546,11 @@ async def get_curve(operation: str, instance: int = 0) -> dict:
 @mcp.tool()
 async def set_curve(operation: str, points: list[list[float]], channel: str | None = None,
                     type: str | None = None, instance: int = 0) -> dict:
-    """Set one channel's curve of a curve module (rgbcurve, tonecurve,
-    colorzones, basecurve) as dragging its nodes does: points [[x, y], ...]
-    in 0..1 with x increasing (2-20 points). channel as get_curve lists them
-    (default the first). type: "cubic spline", "centripetal spline",
-    "monotonic spline". Turns the module on; one history step. Note that
-    rgbcurve works on scene-linear values: middle gray is near x = 0.18, so
-    an S-curve drawn for display values darkens the photo a lot."""
+    """Set one channel's curve of rgbcurve, tonecurve, colorzones or
+    basecurve: points [[x, y], ...] in 0..1, x increasing (2-20). channel
+    as get_curve lists them (default the first). type: "cubic spline",
+    "centripetal spline", "monotonic spline". Switches the module on, one
+    history step. rgbcurve is scene-linear: middle gray is near x = 0.18."""
     await _require("curve_set")
     params: dict[str, Any] = {"operation": operation, "instance": instance, "points": points}
     if channel is not None:
@@ -610,12 +562,10 @@ async def set_curve(operation: str, points: list[list[float]], channel: str | No
 
 @mcp.tool()
 async def duplicate_photo(image_id: int | None = None, virgin: bool = False, save_first: bool = False) -> dict:
-    """Make a duplicate (a new version, a virtual copy of the same raw file)
-    of a photo, as darktable's lighttable does: with its saved edit, or
-    virgin=True for an unedited one. E.g. a B&W version beside the color
-    one: duplicate, open_photo(the new id), convert. If the photo has unsaved
-    changes, save_first=True saves them first (ask the user; they may be
-    theirs). Returns the new photo's library entry."""
+    """Make a duplicate (a virtual copy of the same raw), as darktable's
+    lighttable does: with its saved edit, or virgin=True unedited. Unsaved
+    changes: save_first=True saves them first (ask the user). Returns the
+    new photo's library entry."""
     await _require("image_duplicate")
     if image_id is None:
         image_id = engine.image_id
@@ -632,14 +582,11 @@ async def duplicate_photo(image_id: int | None = None, virgin: bool = False, sav
 
 @mcp.tool()
 async def remove_photos(image_ids: list[int], confirm: bool = False) -> dict:
-    """Remove photos from the darktable library, as the lighttable's
-    "remove" does: each photo's library entry and edit are deleted; the raw
-    file on disk stays, and so do other versions (duplicates) of it. E.g.
-    a duplicate made for an experiment. Refused (nothing removed) for the
-    photo open in darktable's darkroom, a photo with unsaved changes, or one
-    used as an overlay. Can't be undone: say which photos (ids and file
-    names, with list_images / image_info) and ask the user, then pass
-    confirm=True. Returns the removed ids."""
+    """Remove photos from the library, as the lighttable's "remove": their
+    library entries and edits go; files on disk and other duplicates stay.
+    Refused for the darkroom photo, unsaved changes, or an overlay. Can't
+    be undone: name the photos (ids, file names) to the user and ask, then
+    pass confirm=True."""
     await _require("image_remove")
     if not confirm:
         raise ToolError("removing photos can't be undone: tell the user which ones (id, file name, version), "
@@ -703,38 +650,22 @@ async def set_history_end(end: int) -> dict:
 
 @mcp.tool()
 async def get_geometry() -> dict:
-    """The open photo's orientation, straightening and crop:
-    orientation (rotation in clockwise degrees and mirrored, relative to the
-    raw file as the camera wrote it), angle (straightening, degrees, rotate
-    and perspective module), autocrop (that module's automatic crop),
-    crop (left, top, right, bottom as fractions 0-1 of the uncropped photo,
-    i.e. after orientation and straightening), aspect ("free", "original" or
-    "W:H" of the crop), frame_width/frame_height (the uncropped photo in
-    pixels) and width/height (the result)."""
+    """The open photo's orientation (clockwise degrees, mirrored; relative
+    to the raw), angle (straightening), autocrop, crop (left, top, right,
+    bottom, fractions of the uncropped photo), aspect,
+    frame_width/frame_height (uncropped, pixels) and width/height."""
     return await _edit(None, "geometry_get")
 
 
 @mcp.tool()
 async def rotate_photo(degrees: int = 0, angle: float | None = None, mirror: str | None = None,
                        autocrop: str | None = None) -> dict:
-    """Turn, mirror or straighten the open photo, as darktable's darkroom does.
-
-    degrees: turn by quarter turns, relative to now: 90 = clockwise,
-             -90 = counter-clockwise, 180 (orientation module). An existing
-             crop turns with the photo.
-    angle: straighten to this absolute angle in degrees (rotate and
-           perspective module, -180..180; small values like -3..3 level a
-           horizon). Positive turns the photo counter-clockwise (its top
-           moves left), negative clockwise (its top moves right). The
-           automatic crop is refitted so no blank corners show; the
-           frame gets smaller, and a crop module crop keeps its fractions
-           of that new frame, so its framing shifts and tightens: straighten
-           before cropping, or check the framing and crop again after.
-    mirror: "horizontal" (left-right) or "vertical".
-    autocrop: rotate and perspective's automatic crop: "ASHIFT_CROP_LARGEST"
-              (largest area, default), "ASHIFT_CROP_ASPECT" (keep the
-              aspect ratio) or "ASHIFT_CROP_OFF".
-    Returns the new geometry (as get_geometry). Not saved until save."""
+    """Turn, mirror or straighten the open photo. degrees: quarter turns from
+    now (90 = clockwise). angle: absolute straightening in degrees
+    (positive = counter-clockwise); the frame shrinks and a crop shifts, so
+    straighten before cropping. mirror: "horizontal" or "vertical".
+    autocrop: "ASHIFT_CROP_LARGEST" (default), "ASHIFT_CROP_ASPECT",
+    "ASHIFT_CROP_OFF". Returns the geometry. Not saved until save."""
     params: dict[str, Any] = {}
     if degrees:
         params["rotate"] = degrees
@@ -752,18 +683,12 @@ async def rotate_photo(degrees: int = 0, angle: float | None = None, mirror: str
 @mcp.tool()
 async def crop_photo(left: float | None = None, top: float | None = None, right: float | None = None,
                      bottom: float | None = None, aspect: str | None = None, remove: bool = False) -> dict:
-    """Crop the open photo (crop module), as darktable's darkroom does.
-
-    left, top, right, bottom: the crop's edges as fractions 0-1 of the
-        uncropped photo (as render_preview(uncropped=True) shows it: after
-        orientation and straightening); right/bottom are edges, not sizes.
-        Give all four, or none to reshape the current crop with aspect.
-    aspect: "free", "original" (the camera's ratio), "square", or "W:H" of
-        the result, e.g. "3:2", "2:3" (portrait), "16:9", "4:5". The largest
-        box of that aspect inside the given (or current) one is used,
-        centered on it.
-    remove: remove the crop.
-    Returns the new geometry (as get_geometry). Not saved until save."""
+    """Crop the open photo (crop module). left, top, right, bottom: edges as
+    fractions of the uncropped photo (render_preview(uncropped=True));
+    all four, or none to reshape the current crop with aspect. aspect:
+    "free", "original", "square" or "W:H" ("3:2", "2:3" portrait), the
+    largest such box centered in the given one. remove: no crop. Returns
+    the geometry. Not saved until save."""
     edges = [left, top, right, bottom]
     if remove:
         if any(e is not None for e in edges) or aspect:
@@ -784,22 +709,14 @@ async def crop_photo(left: float | None = None, top: float | None = None, right:
 @mcp.tool(structured_output=False)
 async def render_preview(size: int = 800, uncropped: bool = False, zoom: float | None = None,
                          center_x: float = 0.5, center_y: float = 0.5, history_step: int | None = None) -> Image:
-    """darktable's rendering of the open photo with its current (unsaved)
-    edit, fitted inside size x size. Use it to check edits. Images are
-    costly (every later request re-reads them): when a number answers the
-    question (a color, a level, clipping, white balance), use measure_photo
-    instead; for detail use zoom, not a bigger size. uncropped=True
-    shows the whole photo without the crop module's crop (still oriented
-    and straightened), the frame crop_photo's fractions refer to.
-
-    zoom: render a size x size region at this scale instead of the whole
-          photo: 1 = 100% (each pixel of the photo, for judging noise,
-          sharpness, dust), 0.5 = 50%, up to 2. center_x, center_y: the
-          region's center as fractions 0-1 of the photo (0.5, 0.5 = middle;
-          the region stays inside the photo).
-    history_step: render the edit as it was after that many history steps
-          (0 = the original, as get_history counts), for before/after,
-          without undoing anything."""
+    """darktable's render of the open photo with its current edit, fitted
+    in size x size. Images are costly (every later request re-reads them):
+    when a number answers the question (a color, a level, clipping), use
+    measure_photo; for detail use zoom, not a bigger size.
+    zoom: a size x size region at this scale (1 = 100%, up to 2) around
+    center_x, center_y (fractions). uncropped=True: without the crop
+    module's crop (the frame crop_photo uses). history_step: the edit
+    after that many steps (0 = the original)."""
     if engine.image_id is None:
         raise ToolError("no photo is open: call open_photo(image_id) first")
     region = None
@@ -861,14 +778,10 @@ async def mark_before() -> dict:
 @mcp.tool(structured_output=False)
 async def compare_before_after(before_step: int | None = None, show_user: bool = True, size: int = 640) -> list:
     """Before and after of the open photo: both renders (before first) for
-    you to judge, and with show_user the comparison in front of the user:
-    the web app's photo page shows a before/after slider, and if the photo
-    is in darktable's darkroom, darktable's snapshots panel gets a snapshot
-    of the before step, shown split against the edit (drag the line to
-    compare; click the snapshot to hide it). Nothing is undone.
-    before_step: history step (0 = the original, as get_history counts);
-    default: the step before your first edit of this photo (or the one
-    mark_before set)."""
+    you, and with show_user for the user (the web app's slider; in
+    darktable's darkroom a split snapshot). Nothing is undone.
+    before_step: a history step (0 = the original); default: before your
+    first edit of this photo, or where mark_before was."""
     image_id = engine.image_id
     if image_id is None:
         raise ToolError("no photo is open: call open_photo(image_id) first")
@@ -943,25 +856,15 @@ def _steps(changes: list[dict]) -> list[dict]:
 
 @mcp.tool(structured_output=False)
 async def propose_alternatives(alternatives: list[dict], size: int = 640, show_user: bool = True) -> list:
-    """Render alternative versions of the open photo for the user to choose
-    from, without changing the edit: different crops, black and white
-    filters, looks, ... Each is applied to a copy of the current edit,
-    rendered, and dropped. With show_user, the web app's photo page shows
-    them as a strip the user can pick from (its Apply button applies one).
-    Then apply_alternative(choice) applies the one the user picks, or
-    keep_alternative(choice) makes it a duplicate photo.
-
-    alternatives: 2-8 of {"label": "B&W, red filter", "changes": [...]},
-    each change a tool call as {"tool": name, ...its arguments}:
-      set_module (operation, values, instance), enable_module (operation,
-      enabled, instance), apply_preset (operation, name, instance),
-      set_blending (operation, values, instance), set_curve (operation,
-      points, channel, type, instance), crop_photo (left, top, right,
-      bottom, aspect, remove), rotate_photo (degrees, angle, mirror).
-    e.g. {"label": "square", "changes": [{"tool": "crop_photo", "aspect": "square"}]}
-    Alternatives can't add module instances: add one first if they need it
-    (e.g. add_module_instance("channelmixerrgb"), enable_module(it, False),
-    then each alternative enables it with its own preset or gray mix)."""
+    """Render 2-8 alternative versions of the open photo (crops, B&W filters,
+    looks) for the user to choose from, without changing the edit; with
+    show_user the web app shows them as a strip. Then apply_alternative,
+    or keep_alternative (as a duplicate).
+    alternatives: [{"label": "square", "changes": [{"tool": "crop_photo",
+    "aspect": "square"}]}, ...]; a change is set_module, enable_module,
+    apply_preset, set_blending, set_curve, crop_photo or rotate_photo with
+    its arguments. Alternatives can't add instances: add one first,
+    switched off, and let each alternative enable it."""
     image_id = engine.image_id
     if image_id is None:
         raise ToolError("no photo is open: call open_photo(image_id) first")
@@ -1025,14 +928,10 @@ async def apply_alternative(choice: int | str) -> dict:
 
 @mcp.tool()
 async def keep_alternative(choice: int | str, save_first: bool = False) -> dict:
-    """Keep one of the alternatives as a duplicate photo (a new version of
-    the same raw, as darktable's duplicate), with the current edit plus
-    that alternative, saved, its version name set to the label. The open
-    photo is unchanged. E.g. keep a B&W version beside the color one. The
-    duplicate gets the photo's saved edit: if it has unsaved changes,
-    save_first=True saves them first (ask the user; they may be theirs).
-    The user can compare duplicates side by side in darktable's culling
-    view (X in the lighttable)."""
+    """Keep one of the alternatives as a duplicate photo (the current saved
+    edit plus that alternative, saved, named by its label); the open
+    photo is unchanged. Unsaved changes: save_first=True saves them
+    first (ask the user)."""
     image_id = engine.image_id
     if image_id is None:
         raise ToolError("no photo is open")
@@ -1056,27 +955,16 @@ async def export_photo(image_id: int | None = None, format: str | None = None, s
                        quality: int | None = None, high_quality: bool | None = None,
                        path: str | None = None, on_conflict: str | None = None, style: str | None = None,
                        save_first: bool = False) -> dict:
-    """Export a photo to a file with darktable's export (as its export
-    button does), from the photo's SAVED edit. Settings not given come from
-    the user's darktable export settings.
-
-    image_id: default the open photo.
-    format: "jpeg", "tiff", "png", "webp", "jpegxl", ... (darktable's format
-            modules; "jpg"/"tif"/"jxl" work too).
-    size: longest side in pixels; 0 = full size.
-    quality: 1-100 for JPEG, WebP, JPEG XL.
-    high_quality: process at full resolution, then scale (slower, sharper).
-    path: output pattern without extension, with darktable variables, e.g.
-          "$(FILE_FOLDER)/darktable_exported/$(FILE_NAME)" (the usual
-          default) or "/Users/me/Desktop/$(FILE_NAME)_web". A folder ending
-          in "/" gets the file name.
-    on_conflict: "unique" (add _01, ...), "overwrite", "overwrite_if_changed",
-                 "skip".
-    style: a darktable style to apply on export.
-    save_first: if the photo has unsaved changes, save them first (they
-                belong to whoever is editing it, so ask the user); without
-                it, unsaved changes are refused.
-    Returns the file written (or skipped: true)."""
+    """Export a photo (default: the open one) from its SAVED edit, as
+    darktable's export does; what isn't given comes from the user's
+    export settings. format "jpeg", "tiff", "png", "webp", "jpegxl", ...;
+    size: longest side (0 = full); quality 1-100; high_quality: process at
+    full size, then scale. path: a pattern without extension, darktable
+    variables allowed, e.g. "$(FILE_FOLDER)/darktable_exported/$(FILE_NAME)";
+    a folder ending in "/" gets the file name. on_conflict "unique",
+    "overwrite", "overwrite_if_changed", "skip". style: applied on export.
+    Unsaved changes are refused unless save_first (ask the user: they may
+    be theirs). Returns the file written."""
     if image_id is None:
         image_id = engine.image_id
     if image_id is None:
@@ -1148,19 +1036,12 @@ async def measure_photo(points: list[list[float]] | None = None, boxes: list[dic
                         radius: int = 2, size: int = 1024, zoom: float | None = None,
                         center_x: float = 0.5, center_y: float = 0.5, bins: int = 32,
                         history_step: int | None = None) -> dict:
-    """Read the open photo as darktable renders it (display sRGB output, as
-    the darkroom shows it; not values inside the pipe).
-
-    points: [[x, y], ...] fractions of the photo: the color there, averaged
-            over a (2*radius+1)^2 pixel square: rgb (0-1), lab, luminance
-            min/max (linear 0-1). null if outside what was rendered.
-    boxes: [{left, top, right, bottom}] fractions: the same over each box.
-    Also histograms (red, green, blue, luminance; bins) and the fraction of
-    pixels clipped in the highlights (a channel at 255) and shadows (all 0).
-    size: the render's size; zoom/center_x/center_y as render_preview, to
-    measure at 100% (points outside the region come back null).
-    history_step: measure the edit as it was after that many steps (0 =
-    the original), e.g. to compare before/after."""
+    """Read the open photo as darktable renders it (display sRGB, as the
+    darkroom shows it). points [[x, y], ...] and boxes [{left, top, right,
+    bottom}], fractions of the photo: rgb (0-1), lab, luminance min/max
+    (radius: the pixel square around a point); null outside the render.
+    Also histograms and the fractions clipped in highlights and shadows.
+    size, zoom, center_x, center_y, history_step as render_preview."""
     await _require("sample")
     if engine.image_id is None:
         raise ToolError("no photo is open: call open_photo(image_id) first")
@@ -1181,19 +1062,12 @@ _ROMAN = ["0", "I", "II", "III", "IV", "V", "VI", "VII", "VIII", "IX", "X"]
 @mcp.tool(structured_output=False)
 async def zone_map(points: list[list[float]] | None = None, highlight: list[int] | None = None,
                    size: int = 800, history_step: int | None = None) -> list:
-    """The open photo as darktable renders it, reduced to Ansel Adams's
-    eleven print values (zones 0-X): each pixel is shown as the flat grey of
-    its zone, with a zone scale underneath. Zones are steps of 10 in Lab L
-    of the render (zone V = L 45-55, middle grey; 0 = L under 5, X = L 95
-    and up), a print's 1:100 range from black to paper white in equal
-    visual steps.
-
-    Returns the fraction of the photo in each zone, and for points
-    ([[x, y], ...] fractions of the photo) the L there and its zone as a
-    decimal (7.4 = between VII and VIII). highlight: zones to mark in red
-    on the map, e.g. [0, 1] to see where shadows block up, [9, 10] where
-    highlights burn out. history_step as render_preview (0 = the original).
-    For black and white edits; on a color photo it maps its brightness."""
+    """The open photo's render as Ansel Adams's zones 0-X (steps of 10 in
+    Lab L; V = L 45-55), each pixel the flat gray of its zone. Returns the
+    fraction of the photo in each zone, and the L and zone (e.g. 7.4) at
+    points [[x, y], ...]. highlight: zones to mark in red, e.g. [0, 1]
+    (blocked shadows) or [9, 10] (burnt highlights). history_step as
+    render_preview. Meant for black and white."""
     from mcp.server.fastmcp import Image as McpImage
     try:
         import cv2
@@ -1260,44 +1134,29 @@ async def zone_map(points: list[list[float]] | None = None, highlight: list[int]
 
 @mcp.tool()
 async def get_blending(operation: str, instance: int = 0) -> dict:
-    """A module's blending (the section under each module in the darkroom):
-    masks (off, uniform, drawn, parametric, drawn & parametric, raster),
-    blend_mode, reverse, opacity (0-100), blend_parameter, feathering_radius,
-    blur_radius, brightness, contrast, details, combine, feathering_guide,
-    drawn_shapes (count), the parametric ranges that are on, and the
-    channels this module's color space offers (e.g. g, R, G, B, Jz, Cz, hz for
-    scene-referred RGB modules; L, a, b, C, h for Lab ones)."""
+    """A module's blending: masks, blend_mode, opacity, feathering and
+    the other values set_blending takes, drawn_shapes (count), the
+    parametric ranges that are on, and the channels the module's color
+    space offers (e.g. g, R, G, B, Jz, Cz, hz; or L, a, b, C, h)."""
     await _require("blend_get")
     return await _edit(None, "blend_get", operation=operation, instance=instance)
 
 
 @mcp.tool()
 async def set_blending(operation: str, values: dict[str, Any], instance: int = 0) -> dict:
-    """Change a module's blending, all or nothing, as one history step.
-
-    values: any of masks, blend_mode (e.g. "normal", "multiply", "lighten"),
-    reverse, opacity (0-100), blend_parameter, feathering_radius (0-250),
-    blur_radius (0-100), brightness, contrast, details (-1..1), combine
-    ("exclusive", "inclusive", "exclusive & inverted", "inclusive &
-    inverted"), feathering_guide, and parametric: ranges per channel and
-    direction, in the darkroom's units (percent for gray/RGB/L/chroma,
-    -128..128 for Lab a/b, degrees for hue), as four values [low end, low
-    full, high full, high end]; "inverted": true flips a range; null
-    switches a channel off. Ranges turn the parametric mask on.
-    Gray (g) and R/G/B on scene-referred modules are linear: 18 is middle
-    gray and each EV down halves it (9 = -1 EV, 4.5 = -2 EV, 2 = -3 EV).
-    Dark shadows are a few percent, not 20-40: e.g. the darkest tones only
-    {"parametric": {"g_in": {"range": [0, 0, 2, 6]}}}, below middle gray
-    [0, 0, 6, 18]. The values are what reaches this module (after exposure
-    and earlier modules), not what measure_photo reads from the rendered
-    photo, so check a range's effect with render_preview(zoom=...) and
-    narrow it if the change spreads.
-    raster_source {"operation", "instance"} uses another module's
-    mask (one earlier in the pipe that has a drawn or parametric mask) as
-    this one's, as the raster mask menu does; null removes it;
-    raster_inverted flips it. Example: denoise only the shadows (-1.5 EV
-    and below, fading in from -0.5 EV):
-    set_blending("denoiseprofile", {"parametric": {"g_in": {"range": [0, 0, 6, 13]}}})."""
+    """Change a module's blending as one history step (all or nothing).
+    values (as get_blending): masks, blend_mode, reverse, opacity (0-100),
+    blend_parameter, feathering_radius (0-250), blur_radius (0-100),
+    brightness, contrast, details (-1..1), combine, feathering_guide,
+    raster_source {"operation", "instance"} (another module's mask; null
+    removes it), raster_inverted, and parametric: per channel and
+    direction (e.g. "g_in") {"range": [low end, low full, high full, high
+    end], "inverted": true} or null (off), in the darkroom's units; ranges
+    switch the parametric mask on. g and R/G/B are linear on scene-referred
+    modules (18 = middle gray, 9 = -1 EV), e.g. denoise only the shadows:
+    set_blending("denoiseprofile", {"parametric": {"g_in": {"range": [0, 0, 6, 13]}}}).
+    Ranges apply to this module's input, not the render: check with
+    render_preview(zoom=...)."""
     await _require("blend_set")
     return await _edit(None, "blend_set", operation=operation, values=values, instance=instance)
 
@@ -1366,25 +1225,16 @@ async def add_mask(operation: str, shape: str, x: float | None = None, y: float 
                    feather: float = 0.05, compression: float = 0.5, points: list[list[float]] | None = None,
                    width: float = 0.03, hardness: float = 0.5, density: float = 1.0,
                    combine: str = "union", inverted: bool = False, instance: int = 0) -> dict:
-    """Draw a mask shape on a module, so it only acts there (one history
-    step; the module's drawn mask is switched on).
-
-    Positions and sizes are on the photo as shown: x, y fractions 0-1 of the
-    photo; radius and feather fractions of the photo's shorter side.
-      shape "circle": x, y, radius, feather.
-      shape "ellipse": x, y, radius (horizontal), radius_y (vertical),
-        rotation (degrees), feather.
-      shape "gradient": a line through x, y at rotation (degrees, 0 =
-        horizontal line: the module acts on one side, fading across it);
-        compression 0-1 (how wide the fade is).
-      shape "path": a closed outline through points [[x, y], ...] (3 or
-        more), smoothed as darktable's path tool draws it (corners round
-        off: add points close to a corner to keep it); feather. Points
-        outside the photo snap to its edge.
-      shape "brush": a stroke along points (2 or more), width (half the
-        stroke's thickness), hardness and density 0-1.
-    combine: how it joins the module's earlier shapes (union, intersection,
-    difference, exclusion); inverted: the module acts outside it."""
+    """Draw a mask shape on a module so it acts only there (one history
+    step). x, y: fractions 0-1 of the photo as shown; radius, feather:
+    fractions of its shorter side.
+    "circle": x, y, radius, feather. "ellipse": also radius_y, rotation
+    (degrees). "gradient": a line through x, y at rotation (0 =
+    horizontal), compression 0-1 (fade width). "path": a closed outline
+    through points [[x, y], ...] (3 or more; corners round off), feather.
+    "brush": a stroke along points, width (half its thickness), hardness,
+    density. combine with earlier shapes: union, intersection, difference,
+    exclusion; inverted: act outside it."""
     await _require("mask_add", "coords")
     sh = await _shape_on_raw(shape, x, y, radius, radius_y, rotation, feather, compression, points,
                              width, hardness, density)
@@ -1395,19 +1245,12 @@ async def add_mask(operation: str, shape: str, x: float | None = None, y: float 
 @mcp.tool()
 async def add_ai_mask(operation: str, include: list[list[float]], exclude: list[list[float]] | None = None,
                       combine: str = "union", inverted: bool = False, instance: int = 0) -> dict:
-    """Mask a module to an object with darktable's AI object mask (SAM), as
-    clicking on it with the darkroom's object mask tool: darktable finds the
-    object around the points and traces its outline into path shapes on the
-    module's mask (holes subtracted). One history step.
-
-    include: [[x, y], ...] points on the object, fractions 0-1 of the photo
-             as shown (as render_preview shows it); one is enough.
-    exclude: points that are not part of it (to separate a neighbour).
-    combine/inverted: as add_mask. The first call on a photo takes a few
-    seconds (the photo is encoded); later ones are quick. Returns the
-    group's formid (for remove_mask), how many paths, and the area (fraction
-    of the photo). Check the result with render_preview. Needs darktable
-    built with AI and AI enabled in its preferences."""
+    """Mask a module to an object with darktable's AI object mask (SAM),
+    as one history step: include points [[x, y], ...] on it (fractions of
+    the photo as shown; one is enough), exclude points beside it; its
+    outline becomes path shapes. combine/inverted as add_mask. The first
+    call on a photo takes a few seconds. Returns formid (for remove_mask),
+    paths and area. Needs darktable with AI enabled."""
     await _require("mask_ai")
     if await engine.supports("mask_ai_encode"):
         # the slow first step (encoding the photo) in the background
@@ -1427,14 +1270,9 @@ async def add_ai_mask(operation: str, include: list[list[float]], exclude: list[
 @mcp.tool()
 async def list_masks(operation: str, instance: int = 0) -> dict:
     """The drawn shapes on a module's mask: formid (for remove_mask), name,
-    type, combine (how it joins the shapes before it; with darktable's
-    flexi masks, master and 5.8 on, its group's operator, which the user's
-    masks panel can also set to screen, product or sum), inverted, and
-    where it is on the photo as add_mask takes
-    it: on_photo (x, y fractions of the photo as shown); circles and
-    ellipses also radius (radius_y, rotation for an ellipse) and feather,
-    fractions of the photo's shorter side, so a shape can be redrawn
-    bigger or smaller with add_mask."""
+    type, combine, inverted, and where it is as add_mask takes it:
+    on_photo (x, y), and for circles and ellipses radius (radius_y,
+    rotation) and feather, so a shape can be redrawn."""
     await _require("mask_list", "coords")
     import math
     r = await _edit(None, "mask_list", operation=operation, instance=instance)
@@ -1582,102 +1420,28 @@ async def ai_fill(shape: str = "circle", x: float | None = None, y: float | None
                   like_mask_instance: int = 0, like_mask_shapes: list[str | int] | None = None,
                   context: float = 0.5, name: str = "fill", model: str = "local",
                   prompt: str = "", upscale: bool = False, online_size: int = 1024) -> dict:
-    """Remove an object or blemish: the area inside a shape is filled by an
-    AI inpainting model (LaMa) from its surroundings. Non-destructive: a
-    new "composite" module instance called `name` shows the fill, masked by
-    the shape; switch it off (enable_module) or delete it
-    (remove_module_instance) to undo. Its mask can be feathered with
-    set_blending and edited like any mask (add_mask, list_masks,
-    remove_mask). One call, a few seconds (about 6 on a Mac).
+    """Remove an object or blemish: an AI inpainting model fills the area
+    inside a shape from its surroundings, as a new "composite" instance
+    called `name` masked by the shape (undo: enable_module or
+    remove_module_instance; its mask edits like any other). The fill is a
+    float TIFF beside the photo (darktable_fills/), in its group. Needs
+    darktable master or 5.8 on, with AI and an inpaint model.
 
-    The shape is drawn as add_mask does: positions as fractions 0-1 of the
-    photo as shown, radius and feather fractions of its shorter side.
-      shape "circle": x, y, radius, feather.
-      shape "ellipse": x, y, radius, radius_y, rotation (degrees), feather.
-      shape "path": a closed outline through points [[x, y], ...] (3 or
-        more), feather.
-      shape "brush": a stroke along points, width, hardness, density.
-    Outline the object generously (a few pixels around it) and feather a
-    little (the default is 0.01).
-
-    like_mask_of: a module's operation name (e.g. one where add_ai_mask
-    outlined the object): fill exactly the shapes of that module's mask
-    (instance like_mask_instance); the shape, x, y and radius arguments are
-    then ignored. Remove that helper module's mask afterwards (remove_mask)
-    if it was only made for this.
-    like_mask_shapes: only these shapes of that mask, by name (as
-    list_masks shows it, e.g. "circle eye", or without darktable's type
-    word, "eye"; any case) or formid, e.g. ["eye"] when the user drew
-    "eye" and "nose" on one module and wants only the eye filled. The
-    shape is used as drawn, feather included: the fill fades out across
-    the feather, so a shape with a small core and a wide feather leaves
-    the object partly showing.
-
-    model: "local" (default): LaMa on this machine, free, a few seconds;
-    smooth on fur, hair and fine detail. Online, at Black Forest Labs (the
-    crop around the shape, about context x 2 + 1 shape sizes and nothing
-    else, is uploaded; cents and 10-30 s a fill; needs the user's BFL key in
-    BFL_API_KEY or ~/.config/darktable-api-mcp/bfl_api_key; use them when
-    the user asks or agreed to send crops online):
-      "flux-erase": FLUX Erase, made to remove an object. Best for small
-        to medium objects within texture (an eye in fur: no trace). On a
-        large area it re-renders with a look of its own (sharp close-up
-        texture against a soft background), and the patch shows.
-      "flux": FLUX.1 Fill [pro]: paints what belongs there, guided by
-        prompt. Best for large areas and backgrounds with a prompt that
-        describes the scene, e.g. "an empty field of tall dry grass" for
-        a whole animal: it keeps the photo's pixels around the hole, so
-        focus and color match. It may paint something unwanted (a zebra
-        for "dry prairie grass"; on a face a new eye or nose); negatives
-        such as "no eye" don't work.
-      "flux3": FLUX 3 Image, BFL's newest: no mask, an instruction; prompt
-        names what to remove ("the ring of stones"; empty: "the object"
-        in the middle of the crop), or is a whole instruction starting
-        with "Remove". It re-renders the whole crop (brighter, other
-        detail) but only the shape is used, color matched. A removal
-        that doesn't invent things, like flux-erase but slower (~30 s)
-        and dearer (~5 credits); try it where flux-erase leaves a trace.
-    FLUX results differ from run to run: fill two or three times and
-    compare to choose. A fill made online is color matched to the photo
-    (what the model did to the pixels it should have kept is undone in the
-    fill; patch.color_match in the reply).
-    Online fills are made at online_size (default 1024, up to 2048; the
-    models were trained near 1024): a crop larger than that comes back
-    softer than the photo (patch.size vs patch.model_size in the reply).
-    upscale=True (online only) runs such a fill through darktable's AI
-    upscaler (RealPLKSR, 2x or 4x, local) before placing it: sharper, with
-    detail the upscaler invents; patch.upscaled in the reply gives the
-    factor, missing when no upscale model is installed. Seconds on a GPU,
-    minutes on a CPU.
-
-    context 0.25-4 (default 0.5): how much of the surroundings the model
-    sees, in shape sizes. Smaller keeps texture sharper; larger (e.g. 1.0)
-    suits big uniform areas such as sky. propose_alternatives cannot run
-    fills: to choose, make a second fill with a different context and
-    compare with render_preview(zoom=1), then remove the worse instance with
-    remove_module_instance. Check the result at 100% with
-    render_preview(zoom=1) before and after.
-
-    The fill is written as a float TIFF beside the photo (in a
-    darktable_fills folder, or in DTAPI_FILLS_DIR when the server sets it) and imported into the photo's group. Needs the
-    inpaint model installed (inpaint-lama, or inpaint-migan, in darktable's
-    models folder) and AI enabled.
-
-    Size: small to medium shapes only. Shapes up to about 1300 px across
-    at full size (a tail, a sign, a person in the distance; roughly a fifth
-    of the photo's shorter side) fill with believable texture. Larger ones
-    (a main subject) come out as a soft, flat smear, not texture: before
-    filling a large shape, tell the user it will likely not look right.
-    When the reply has a "warning", show it to the user in your answer, as
-    it is, and check the fill at 100% with them. In darktable's window the
-    user can mark the area themselves: a drawn mask on any module (e.g. a
-    spare exposure instance), then like_mask_of that module
-    (like_mask_shapes to take some of its shapes). Not available
-    on darktable-api for 5.6 (it needs darktable master, or 5.8 on). Returns the
-    instance, name, imgid of the patch photo, file, model, patch box,
-    shape_px (the shape's longest side in pixels), process_ms, for a
-    large shape warning, and with model "flux" bfl (task, cost in credits,
-    seconds)."""
+    shape as add_mask, on the photo as shown: "circle" (x, y, radius,
+    feather), "ellipse" (+ radius_y, rotation), "path" (points, feather),
+    "brush" (points, width, hardness, density). Outline a few pixels
+    beyond the object.
+    like_mask_of: fill that module's mask shapes instead (instance
+    like_mask_instance; like_mask_shapes: some of them, by name or formid).
+    context 0.25-4: surroundings the model sees, in shape sizes (smaller
+    keeps texture sharper; ~1 for sky).
+    model "local" (LaMa, free, seconds), or online at Black Forest Labs,
+    only when the user agreed to upload crops: "flux-erase", "flux"
+    (prompt describes the scene), "flux3" (prompt: what to remove);
+    online_size, upscale. The darktable-cleanup skill says which model,
+    and which shapes are too large to fill well.
+    Show a "warning" in the reply to the user as it is; check the fill
+    with render_preview(zoom=1)."""
     await _require("ai_fill", "coords")
     if shape == "gradient":
         raise ToolError("a gradient cannot be filled: use circle, ellipse, path or brush")
@@ -1767,17 +1531,12 @@ async def list_retouch_spots() -> dict:
 
 @mcp.tool()
 async def retouch_spots(spots: list[dict]) -> dict:
-    """Add spots to the retouch module, as its circle tool does, all in one
-    history step. Each spot: {x, y, radius, tool, ...} on the photo as shown
-    (x, y fractions 0-1; radius a fraction of the shorter side, e.g. 0.01).
-      tool "heal" (default) or "clone": copies from source_x, source_y
-        (required; heal blends the copy into its surroundings);
-      tool "blur": blur_radius (0.1-200, default the module's), blur_type
-        ("gaussian" or "bilateral");
-      tool "fill": fill_mode ("erase" or "color"), fill_color [r, g, b]
-        (0-1, the module's working RGB), fill_brightness (-1 to 1).
-    Returns the new spots' formids. For sensor dust, heal_dust_spots finds
-    and heals them for you."""
+    """Add spots to the retouch module, as one history step. Each spot:
+    {x, y, radius, tool, ...} on the photo as shown (radius a fraction of
+    the shorter side, e.g. 0.01). tool "heal" (default) or "clone":
+    source_x, source_y (required); "blur": blur_radius, blur_type
+    ("gaussian", "bilateral"); "fill": fill_mode ("erase", "color"),
+    fill_color [r, g, b], fill_brightness (-1..1). Returns the formids."""
     await _require("retouch_add", "coords")
     specs = [await _retouch_spec(s, adding=True) for s in spots]
     return await _edit(None, "retouch_add", spots=specs)
@@ -1813,11 +1572,9 @@ async def remove_retouch_spots(formids: list[int]) -> dict:
 
 @mcp.tool()
 async def list_styles(filter: str = "", camera_styles: bool = False) -> dict:
-    """darktable's styles (saved sets of module settings): name, description,
-    the modules each holds, and whether it sets the module order. name is
-    what apply_style takes; label is how darktable shows it. filter matches
-    names. darktable's built-in camera styles (base curves per
-    camera model, hundreds) are left out unless camera_styles."""
+    """darktable's styles: name (for apply_style), label, description, its
+    modules, whether it sets the module order. filter matches names;
+    camera_styles adds darktable's per-camera base curve styles."""
     await _require("style_list")
     r = await _call("style_list", filter=filter)
     styles = [{"name": st["name"], "label": st.get("label", st["name"]), "description": st["description"],
@@ -1871,12 +1628,11 @@ async def delete_style(name: str) -> dict:
 async def paste_edit(from_image_id: int, image_ids: list[int] | None = None, mode: str = "append",
                      modules: list | None = None, module_order: bool = False,
                      save_first: bool = False) -> dict:
-    """Copy one photo's saved edit onto others (default: the open photo), as
-    darktable's copy and paste: all of it, or only modules (names or
-    {"operation", "instance"}, as selective copy). mode "append" adds to
-    each edit, "overwrite" replaces it. The result is saved; a target with
-    unsaved changes here is refused unless save_first. module_order also
-    copies the module order."""
+    """Copy one photo's saved edit (default: the open photo) onto others, as
+    darktable's copy and paste: all, or only modules (names or
+    {"operation", "instance"}). mode "append" or "overwrite". Saved; a
+    target with unsaved changes is refused unless save_first. module_order
+    copies the module order too."""
     await _require("history_paste")
     ids = image_ids or ([engine.image_id] if engine.image_id is not None else None)
     if not ids:
@@ -2066,42 +1822,17 @@ def _dust_spot_json(s: dict, geom: dict) -> dict:
 @mcp.tool(structured_output=False)
 async def find_dust_spots(image_id: int | None = None, rebuild_map: bool = False,
                           this_photo: bool | None = None) -> list:
-    """Find sensor dust in a photo (default: the open one). Read-only.
-
-    Dust sits at the same sensor position in every frame, so this maps the
-    soft dark round blobs that recur across the photo's film roll (cached; the
-    first call for a roll reads every raw file, ~0.4 s each), small specks
-    and large soft blobs (~50-300 px), then measures each mapped spot in this
-    photo: dust shows against smooth, bright-ish backgrounds (sky), more at
-    small apertures.
-
-    this_photo=True also looks for dust in this photo alone, in darktable's
-    render of its current edit: one-off spots the roll's map doesn't have,
-    and spots an edit brought out (a black and white red or orange filter
-    darkens a blue sky and shows faint dust). These are round, even, soft
-    blobs on smooth areas, numbered from 101, found_in "this photo", with a
-    second crop sheet (the photo as rendered), at most 8, the strongest
-    first. One photo can't prove a blob is dust (in a noisy sky, noise and
-    soft cloud gradients look alike): look at that sheet and heal only the
-    round soft shadows, heal_dust_spots(spots=[ids]). Left out (None), it
-    is on when the edit is black and white (a color calibration gray mix or
-    the monochrome module; the summary's this_photo_reason says which) and
-    off otherwise; True when the user sees spots the map lacks. Converting
-    a photo to black and white changes what dust shows: search again after
-    the conversion, not only before it.
-
-    Returns a summary and a sheet of numbered crops (sensor orientation,
-    contrast-stretched; green = visible here, red = hidden). Per spot: status
-    ("obvious": repair it; "visible": seen through some texture; "hidden":
-    texture or an edge hides it, leave it), already_retouched (an active
-    retouch circle covers it, unsaved ones included), darkening %,
-    contrast_vs_background, background, diameter_px (full size), on_photo
-    (x, y as fractions of the photo as rendered; null if cropped out: use it
-    for render_preview(zoom=1, center_x, center_y)), and in how many frames of
-    the roll it recurs, size ("small" or "large"; a large one in a cloudy
-    sky may be rated obvious where it hardly shows: check the sheet). Finds
-    the obvious dust, not every speck. Opens the photo (joins its edit).
-    heal_dust_spots repairs them."""
+    """Find sensor dust in a photo (default: the open one; opens it).
+    Read-only. Maps the soft dark blobs that recur across the photo's film
+    roll (cached; the first call reads every raw, ~0.4 s each), then rates
+    each in this photo: "obvious" (repair), "visible" (seen through some
+    texture), "hidden" (leave it). this_photo=True also searches this
+    photo's render alone (ids from 101, a sheet of their own: heal only the
+    round soft shadows); left out, it is on for black and white edits.
+    Returns a summary, per spot status, already_retouched, size and
+    on_photo (x, y for render_preview(zoom=1)), and numbered crop sheets
+    to look at. heal_dust_spots repairs them; the darktable-cleanup skill
+    has the workflow."""
     from mcp.server.fastmcp import Image as McpImage
     a = await _dust_analysis(image_id, rebuild_map, this_photo)
     dust = _dust_module()
@@ -2205,37 +1936,16 @@ async def _photo_heal_plan(a: dict, s: dict, need_source: bool = True) -> dict |
 async def heal_dust_spots(image_id: int | None = None, spots: list[int] | None = None,
                           include_visible: bool = False, method: str = "auto",
                           dry_run: bool = False) -> list:
-    """Heal sensor dust in a photo (default: the open one) with darktable's
-    retouch module, or with an AI fill where healing leaves a trace.
-
-    By default heals the spots find_dust_spots rates "obvious" that no active
-    retouch circle or dust fill covers yet; include_visible adds the
-    "visible" ones, and spots=[ids] picks specific ones. Dust
-    find_dust_spots(this_photo=True) found in this photo alone (ids from
-    101) is healed only when listed in spots, after you looked at its crop
-    sheet; call this on the same edit as find_dust_spots, so the numbers
-    match.
-
-    method:
-      "auto" (default): a heal circle, or an AI fill (ai_fill) where no
-        clean source patch is nearby. A heal keeps the texture of ground
-        and foliage; a fill smooths it (a soft, slightly lighter disk), but
-        needs no source. Without ai_fill (darktable-api for 5.6) those
-        spots are skipped.
-      "heal": heal circles only.
-      "ai_fill": AI fills only (e.g. dust on a gradient where heals show).
-    A heal circle is about twice the dust's radius, copying from a nearby
-    patch chosen to be smooth and to match the brightness around it; all
-    heal circles are one history step in one retouch instance, and can be
-    pasted to other photos of the roll. Each fill is its own "composite"
-    instance named "dust #id" with a small TIFF in the photo's group (a few
-    seconds each); it applies to this photo only. Undo: set_history_end.
-    Not saved until save.
-
-    Checks the result at 100% around each spot before and after and returns
-    the darkening per spot before/after (healed when it mostly disappears;
-    on textured ground the texture itself reads as a little darkening), plus a before/after sheet. dry_run=True only returns
-    the plan."""
+    """Heal the dust find_dust_spots found (on the same edit, so ids match;
+    default: the open photo). Default: "obvious" spots not yet retouched;
+    include_visible adds "visible" ones; spots=[ids] picks (ids from 101
+    only this way, after looking at their sheet).
+    method "auto" (heal circles; an AI fill where no clean source is
+    nearby, skipped on 5.6), "heal", or "ai_fill" (smooths texture: not on
+    ground or foliage). Heals are one retouch history step; fills are
+    "dust #id" composite instances. Not saved until save; undo with
+    set_history_end. Checks each spot at 100%: returns darkening
+    before/after and a before/after sheet. dry_run=True: the plan only."""
     from mcp.server.fastmcp import Image as McpImage
     import cv2
     import numpy as np
@@ -2367,14 +2077,11 @@ async def heal_dust_spots(image_id: int | None = None, spots: list[int] | None =
 
 @mcp.tool()
 async def check_sensor_clipping(image_id: int | None = None) -> dict:
-    """Whether the sensor really clipped: counts photosites at the camera's
-    white level in the raw file, per color. A render's histogram can't tell
-    that (white balance, exposure and the tone mapper move it): highlights
-    clipped on the sensor are gone and can only be reconstructed
-    (highlights module), while highlights merely bright in the render are
-    recoverable with the tone mapper, exposure or tone equalizer. Also gives
-    each color's headroom: how far its brightest 0.1% sits below clipping,
-    in EV. Needs pip install 'darktable-api-mcp[dust]' (rawpy)."""
+    """Whether the sensor really clipped: photosites at the raw's white
+    level per color, and each color's headroom (how far its brightest 0.1%
+    is below clipping, in EV). Clipped on the sensor: only the highlights
+    module can rebuild it; merely bright in the render: recoverable with
+    exposure or the tone mapper. Needs the [dust] extra (rawpy)."""
     import math
     try:
         import numpy as np
@@ -2460,19 +2167,12 @@ async def _run_job(start, wait: bool, timeout_s: float) -> dict:
 @mcp.tool()
 async def ai_denoise(image_id: int | None = None, strength: float | None = None, wait: bool = True,
                      timeout_s: int = 600) -> dict:
-    """Denoise a raw photo with darktable's AI raw denoise (neural restore,
-    RawNIND): the model runs on the sensor data and writes a new DNG beside
-    the original (darktable's output pattern, by default
-    <name>_restore.dng), imported into the library in the photo's group with
-    its rating, labels, tags and metadata. The new photo starts unedited:
-    open_photo(new_imgid) and edit that one (no further denoise needed,
-    usually). strength 0-1 blends the original and the denoised raw
-    (default: darktable's setting, else 1).
-
-    Runs as a background job (seconds with Apple's Neural Engine, can be
-    minutes on CPU): wait=True waits for it and returns the result
-    (new_imgid, file); wait=False returns the job at once (job_status,
-    cancel_job). Needs darktable built with AI and AI enabled."""
+    """Denoise a raw with darktable's AI raw denoise (RawNIND): writes a new
+    DNG beside the original, imported into the photo's group with its
+    rating, tags and metadata, unedited: open_photo(new_imgid) and edit
+    that one. strength 0-1 blends with the original (default: darktable's
+    setting). A job (seconds to minutes): wait=True returns new_imgid and
+    file. Needs darktable with AI enabled."""
     await _require("ai_denoise")
     if image_id is None:
         image_id = engine.image_id
@@ -2488,18 +2188,11 @@ async def ai_denoise(image_id: int | None = None, strength: float | None = None,
 
 @mcp.tool()
 async def list_pickers(operation: str, instance: int = 0) -> dict:
-    """A module's color pickers and auto buttons, as darktable's darkroom
-    shows them: name (for use_picker; e.g. exposure "exposure", agx
-    "exposure range/auto tune levels", channelmixerrgb "picker" (white
-    balance from an area), colorbalancergb "white fulcrum", toneequal "mask
-    exposure compensation" (its wand), rgblevels "auto levels") and kind
-    (picker or button). All of them for the photo in darktable's darkroom,
-    with darktable's window serving the library (open_darkroom_photo); on
-    any other photo, all the pickers (exposure, white balance, color
-    calibration, agx, filmic rgb, levels, rgb levels, color balance rgb,
-    color balance, spektrafilm, color harmonizer, curves' "create curve",
-    retouch's fill color, invert, ...); auto buttons need the window. A
-    picker darktable hides in the module's current mode is refused."""
+    """A module's color pickers and auto buttons (name, kind) for
+    use_picker, e.g. exposure "exposure", channelmixerrgb "picker", agx
+    "exposure range/auto tune levels", toneequal "mask exposure
+    compensation". Pickers work on any photo, auto buttons only on the
+    photo in darktable's darkroom."""
     await _require("picker_list")
     return await _edit(None, "picker_list", operation=operation, instance=instance)
 
@@ -2507,43 +2200,18 @@ async def list_pickers(operation: str, instance: int = 0) -> dict:
 @mcp.tool()
 async def use_picker(operation: str, control: str, box: dict | None = None, point: list[float] | None = None,
                      instance: int = 0, wait: bool = True, timeout_s: float = 60) -> dict:
-    """Use a module's picker or auto button (name from list_pickers) on the
-    photo in darktable's darkroom, exactly as clicking it there: darktable
-    samples the area and sets the module (e.g. exposure from a midtone area,
-    white balance from a neutral area, AgX's levels from the whole photo).
-    On other photos (no window needed), list_pickers' pickers work the same
-    way: exposure "exposure" brings the area to mid gray (darktable's
-    lightness target, 50% by default), monochrome "highlights" sets the
-    filter color from the area (e.g. skin, to lighten it), channelmixerrgb
-    "picker" sets white balance (a custom illuminant) that makes the area
-    neutral gray: pick something that should be white or gray. It is
-    refused when the module's adaptation is "none (bypass)" (monochrome
-    raws, a second instance), as darktable hides it then. temperature
-    "settings/from image area" sets the white balance module's
-    coefficients (preset "from image area") from the raw: in the
-    scene-referred workflow white balance belongs in color calibration, so
-    prefer channelmixerrgb "picker" unless the user asks for this module.
-    retouch "pick fill color" takes the fill color for new fill spots from
-    the module's output (use a point). colorbalance (the older color
-    balance): its factor and hue pickers set one range from the area and
-    remember it; "optimize luma" and "neutralize colors" (slope, offset,
-    power mode) then fit to those remembered areas, picking the rest from
-    their own area, as in darktable. spektrafilm "pre-compression boost"
-    and "post-compression scale" set the factor that puts the area's
-    brightest tone near white through the film simulation (refused when
-    its data pack isn't installed: darktable's window offers the download).
-    colorharmonizer "anchor hue" sets the harmony's key hue from the area;
-    with the "custom" rule "custom hue 1" to "custom hue 4" set each node's
-    hue instead (up to its "nodes" count).
-    box {left, top, right, bottom} or point [x, y]: fractions 0-1 of the
-    photo as shown; without either, darktable's default area (nearly the
-    whole photo). Buttons take no area. Returns which settings changed
-    (result.changed) and the sample (result.sample: the module's input in
-    the picker's color space, mean/min/max; result.output_sample: the
-    module's output, for retouch's fill color). One history step; switches the
-    module on. Runs as a job that ends when darktable has applied it
-    (usually well under a second; the first use may wait for darktable to
-    load the photo)."""
+    """Use a module's picker or auto button (names from list_pickers) as
+    clicking it in the darkroom: darktable samples the area and sets the
+    module (switched on, one history step). Pickers work on any photo;
+    auto buttons only on the photo in darktable's darkroom. Common:
+    exposure "exposure" (the area to mid gray), channelmixerrgb "picker"
+    (white balance making the area neutral; prefer it to temperature's
+    "settings/from image area"), agx "exposure range/auto tune levels",
+    monochrome "highlights" (filter color from the area).
+    box {left, top, right, bottom} or point [x, y], fractions of the photo
+    as shown; neither: darktable's default area; buttons take none.
+    Returns result.changed and result.sample (the module's input,
+    mean/min/max; result.output_sample: its output)."""
     await _require("picker_apply")
     params: dict[str, Any] = {"operation": operation, "instance": instance, "control": control}
     if box is not None:
@@ -2582,11 +2250,10 @@ async def cancel_job(job: int) -> dict:
 
 @mcp.tool()
 async def library_status() -> dict:
-    """Who serves the library ("server": "gui" for darktable's window,
-    "engine" for the headless engine), whether the engine has released it to
-    darktable's GUI ("released", with the GUI's process id), darkroom_imgid
-    (the photo open in darktable's darkroom, 0 if none; gui only), the
-    current photo and whether it has unsaved changes."""
+    """Who serves the library ("server": "gui" or "engine"), whether it is
+    released to darktable's GUI, darkroom_imgid (the photo in darktable's
+    darkroom, 0 if none), the current photo and whether it has unsaved
+    changes."""
     try:
         return await engine.library("library_status")
     except EngineError as exc:
@@ -2625,6 +2292,36 @@ async def takeover_library(confirm: bool = False) -> dict:
         return await engine.takeover()
     except EngineError as exc:
         raise _err(exc)
+
+
+def _slim_schema(node: Any) -> Any:
+    """A parameter schema without pydantic's titles, and `X | None = None`
+    as plain X (left out means None): the same arguments in fewer tokens
+    (every request re-reads them). Arguments are still checked against the
+    functions' own signatures."""
+    if isinstance(node, list):
+        return [_slim_schema(n) for n in node]
+    if not isinstance(node, dict):
+        return node
+    out = {}
+    for key, value in node.items():
+        if key == "title" and isinstance(value, str):
+            continue
+        if key == "properties":
+            out[key] = {name: _slim_schema(prop) for name, prop in value.items()}
+        else:
+            out[key] = _slim_schema(value)
+    options = out.get("anyOf")
+    if options and len(options) == 2 and {"type": "null"} in options:
+        other = next(o for o in options if o != {"type": "null"})
+        if isinstance(other.get("type"), str) and out.get("default", 0) is None:
+            del out["anyOf"], out["default"]
+            out = {**other, **out}
+    return out
+
+
+for _tool in mcp._tool_manager.list_tools():
+    _tool.parameters = _slim_schema(_tool.parameters)
 
 
 def main() -> None:
