@@ -2494,8 +2494,8 @@ async def list_pickers(operation: str, instance: int = 0) -> dict:
     with darktable's window serving the library (open_darkroom_photo); on
     any other photo, the pickers that work without the window so far
     (most of them: exposure, white balance, color calibration, agx, filmic
-    rgb, levels, rgb levels, color balance rgb, color balance, curves'
-    "create curve", retouch's fill color, invert, ...). A picker
+    rgb, levels, rgb levels, color balance rgb, color balance, spektrafilm,
+    curves' "create curve", retouch's fill color, invert, ...). A picker
     darktable hides in the module's current mode is refused."""
     await _require("picker_list")
     return await _edit(None, "picker_list", operation=operation, instance=instance)
@@ -2525,7 +2525,10 @@ async def use_picker(operation: str, control: str, box: dict | None = None, poin
     balance): its factor and hue pickers set one range from the area and
     remember it; "optimize luma" and "neutralize colors" (slope, offset,
     power mode) then fit to those remembered areas, picking the rest from
-    their own area, as in darktable.
+    their own area, as in darktable. spektrafilm "pre-compression boost"
+    and "post-compression scale" set the factor that puts the area's
+    brightest tone near white through the film simulation (refused when
+    its data pack isn't installed: darktable's window offers the download).
     box {left, top, right, bottom} or point [x, y]: fractions 0-1 of the
     photo as shown; without either, darktable's default area (nearly the
     whole photo). Buttons take no area. Returns which settings changed
