@@ -23,8 +23,8 @@ from .engine import EngineError, engine
 
 INSTRUCTIONS = """\
 Edits photos in a darktable library through darktable-api (a headless
-darktable). Flow: open_photo(id) -> get_module (setting names, ranges,
-dropdown values) -> set_module(..., preview=True) -> save. Edits stay
+darktable). Flow: open_photo(id) -> get_module (setting names and values;
+full=True for every range and dropdown) -> set_module(..., preview=True) -> save. Edits stay
 in memory until save; discard_changes reopens the saved state. "Photo 36"
 means library id 36. One photo is current at a time (the last open_photo).
 
@@ -387,7 +387,8 @@ async def set_location(latitude: float | None = None, longitude: float | None = 
 @mcp.tool()
 async def open_photo(image_id: int, discard_unsaved: bool = False) -> dict:
     """Open a photo for editing and make it the current photo; lists its
-    modules and history. A photo already open (by you, or by the user in
+    modules in pipeline order ("operation instance 'name'", "off" when
+    switched off; list_modules for labels) and history. A photo already open (by you, or by the user in
     another app) is joined with its unsaved changes ("unsaved": true);
     discard_unsaved=True reloads it as saved, dropping those changes for
     everyone (ask the user first)."""
@@ -398,10 +399,19 @@ async def open_photo(image_id: int, discard_unsaved: bool = False) -> dict:
         info = await engine.call("image_info", imgid=image_id)
     except EngineError as exc:
         raise _err(exc)
-    return {"image": info.get("image"), "unsaved": opened.get("unsaved"),
-            "shared": opened.get("joined"),
-            "modules": [m for m in mods["modules"] if m["in_history"] or m["enabled"]],
+    image = {k: v for k, v in (info.get("image") or {}).items()
+             if k != "changed" and v not in ([], None) and not (k == "version" and v == 0)}
+    return {"image": image, "unsaved": opened.get("unsaved"), "shared": opened.get("joined"),
+            "modules": [_module_tag(m) for m in mods["modules"] if m["in_history"] or m["enabled"]],
             "history_end": hist["history_end"], "history_items": len(hist["items"])}
+
+
+def _module_tag(m: dict) -> str:
+    """A module in a line: "exposure", "exposure 1 'sky'", "lens off"."""
+    tag = m["operation"] + (f" {m['instance']}" if m["instance"] else "")
+    if m.get("name") and not m["name"].startswith("_builtin"):
+        tag += f" '{m['name']}'"
+    return tag + ("" if m["enabled"] else " off")
 
 
 @mcp.tool()
@@ -478,14 +488,41 @@ async def list_modules() -> dict:
     return await _edit(None, "module_list")
 
 
+def _r(v: Any) -> Any:
+    """Floats to 4 significant digits (darktable's are float32: 0.699999988)."""
+    if isinstance(v, float):
+        return float(f"{v:.4g}")
+    if isinstance(v, list):
+        return [_r(x) for x in v]
+    return v
+
+
 @mcp.tool()
-async def get_module(operation: str, instance: int = 0) -> dict:
-    """A module's settings on the open photo: for each setting its name,
-    current value, default, allowed range (min/max) and, for dropdowns, the
-    possible values (name and label). List settings have a "shape" (e.g.
-    [4], or [6, 7]) and nested values, e.g. color calibration's gray mix
-    "grey" (R, G, B, normalization). Use these names in set_module."""
-    return await _edit(None, "module_get", operation=operation, instance=instance)
+async def get_module(operation: str, instance: int = 0, full: bool = False) -> dict:
+    """A module's settings on the open photo. "settings": the ones changed
+    from their default, each with value, default, range, label (darktable's
+    name for it) and a dropdown's options; "at_default": the rest, name:
+    value. List settings have nested values, e.g. color calibration's gray
+    mix "grey" (R, G, B, normalization). Use these names in set_module.
+    full=True: every setting's range, label, shape and options."""
+    m = await _edit(None, "module_get", operation=operation, instance=instance)
+    if full:
+        return m
+    out = {k: m[k] for k in ("operation", "instance", "enabled") if k in m}
+    out["settings"], out["at_default"] = {}, {}
+    for f in m.get("fields", []):
+        if f.get("default") == f["value"]:
+            out["at_default"][f["name"]] = _r(f["value"])
+            continue
+        e = {"value": _r(f["value"]), "default": _r(f.get("default"))}
+        if "min" in f:
+            e["range"] = [_r(f["min"]), _r(f["max"])]
+        if f.get("description"):
+            e["label"] = f["description"]
+        if "values" in f:
+            e["options"] = [o["name"] for o in f["values"] if o["label"]]
+        out["settings"][f["name"]] = e
+    return out
 
 
 @mcp.tool(structured_output=False)
@@ -1065,13 +1102,15 @@ async def start_over(confirm: bool = False) -> dict:
 async def measure_photo(points: list[list[float]] | None = None, boxes: list[dict] | None = None,
                         radius: int = 2, size: int = 1024, zoom: float | None = None,
                         center_x: float = 0.5, center_y: float = 0.5, bins: int = 32,
-                        history_step: int | None = None) -> dict:
+                        history_step: int | None = None, channels: bool = False) -> dict:
     """Read the open photo as darktable renders it (display sRGB, as the
     darkroom shows it). points [[x, y], ...] and boxes [{left, top, right,
     bottom}], fractions of the photo: rgb (0-1), lab, luminance min/max
     (radius: the pixel square around a point); null outside the render.
-    Also histograms and the fractions clipped in highlights and shadows.
-    size, zoom, center_x, center_y, history_step as render_preview."""
+    Also the luminance histogram (% of pixels per bin, dark to light;
+    channels=True adds red, green, blue) and the fractions clipped in
+    highlights and shadows. size, zoom, center_x, center_y, history_step as
+    render_preview."""
     await _require("sample")
     if engine.image_id is None:
         raise ToolError("no photo is open: call open_photo(image_id) first")
@@ -1083,7 +1122,15 @@ async def measure_photo(points: list[list[float]] | None = None, boxes: list[dic
     if history_step is not None:
         await _require("render.history_end")
         params["history_end"] = max(0, history_step)
-    return await _edit(None, "sample", **params)
+    r = await _edit(None, "sample", **params)
+    r.pop("process_ms", None)
+    hist = r.get("histogram") or {}
+    total = sum(hist.get("luminance") or []) or 1
+    r["histogram"] = {ch: [round(100 * n / total, 1) for n in counts] for ch, counts in hist.items()
+                      if channels or ch == "luminance"}
+    if not channels:
+        r["histogram"] = r["histogram"].get("luminance", [])
+    return r
 
 
 _ROMAN = ["0", "I", "II", "III", "IV", "V", "VI", "VII", "VIII", "IX", "X"]
@@ -2354,6 +2401,29 @@ def _slim_schema(node: Any) -> Any:
 
 for _tool in mcp._tool_manager.list_tools():
     _tool.parameters = _slim_schema(_tool.parameters)
+
+
+def _compact_replies() -> None:
+    """Replies as compact JSON: FastMCP writes a tool's dict as indented
+    JSON text (one line per array element), and that text is what the
+    model reads; compact, a reply costs about half the tokens. Lists
+    (a reply and its preview) are converted item by item, as before."""
+    import pydantic_core
+    from mcp.server.fastmcp.utilities import func_metadata
+    convert = getattr(func_metadata, "_convert_to_content", None)
+    if convert is None or getattr(convert, "_compact", False):
+        return    # another mcp version: its own output, still correct
+
+    def compact(result: Any):
+        if isinstance(result, dict):
+            result = pydantic_core.to_json(result, fallback=str).decode()
+        return convert(result)
+
+    compact._compact = True
+    func_metadata._convert_to_content = compact
+
+
+_compact_replies()
 
 
 def main() -> None:

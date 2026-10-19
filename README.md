@@ -218,7 +218,7 @@ a server over SSH, with the web app reached through an SSH tunnel
 | `open_in_darkroom`, `get_collection` | switch darktable's darkroom to a photo (needs darktable's window); the photos darktable's lighttable shows, and the selection |
 | `check_sensor_clipping` | real sensor clipping, from the raw file, per color, with each color's headroom (needs the `[dust]` extra) |
 | `open_darkroom_photo` | open the photo the user has open in darktable's darkroom (needs darktable's window) |
-| `list_modules`, `get_module` | the photo's modules; a module's settings with values, defaults, ranges and dropdown values |
+| `list_modules`, `get_module` | the photo's modules; a module's changed settings with defaults, ranges and dropdown values, the rest by value (`full=True`: all details) |
 | `set_module`, `enable_module` | change settings by name (checked, all or nothing), lists whole or by element (`grey[1]`), module on/off; `preview=True` / `measure={...}` (also on `apply_preset`, `set_blending`, `set_curve`, `crop_photo`) return the render or readout in the same call |
 | `list_presets`, `apply_preset` | a module's presets, applied as darktable's presets menu does (e.g. "monochrome \| luminance-based") |
 | `get_history`, `set_history_end` | history steps; undo/redo to a step |
@@ -232,7 +232,7 @@ a server over SSH, with the web app reached through an SSH tunnel
 | `get_blending`, `set_blending` | a module's blending: blend mode, opacity, parametric ranges per channel in the darkroom's units (e.g. denoise only the shadows) |
 | `add_ai_mask` | darktable's AI object mask: points on a subject, outlined into path shapes on a module (needs darktable built with AI, AI enabled) |
 | `add_mask`, `list_masks`, `remove_mask` | drawn shapes (circle, ellipse, gradient, path, brush stroke) on a module, placed on the photo as shown; `set_blending(raster_source=...)` reuses another module's mask |
-| `measure_photo` | values at points and in boxes, histograms and clipping of the rendered photo |
+| `measure_photo` | values at points and in boxes, the histogram (`channels=True`: per channel) and clipping of the rendered photo |
 | `zone_map` | the rendered photo reduced to Ansel Adams's eleven print values (zones 0-X, steps of 10 in Lab L), with the share of the photo in each zone, zones at points, and chosen zones marked in red (needs the `[dust]` extra) |
 | `ai_denoise`, `job_status`, `list_jobs`, `cancel_job` | darktable's AI raw denoise as a background job: a new DNG photo beside the original, in its group (needs darktable built with AI) |
 | `ai_fill` | remove an object or blemish: an AI inpainting model (LaMa, or MI-GAN) fills a drawn shape, or the outline of an `add_ai_mask` module (`like_mask_of`), from its surroundings; shown by a new composite instance (non-destructive; needs the inpaint model installed: [Quick start](#steps), after step 7) Small to medium shapes (up to about 1300 px across); larger ones are warned about (a soft smear). In darktable's window too: draw the area as a mask on any module, then `like_mask_of` (`like_mask_shapes` for some of its shapes, by name). Online, `model="flux-erase"` (FLUX Erase, for removals: real texture such as fur) `"flux"` (FLUX.1 Fill, paints what belongs there, with a `prompt`) or `"flux3"` (FLUX 3 Image, told in `prompt` what to remove) at Black Forest Labs: only the crop around the shape is uploaded; needs your BFL key in `BFL_API_KEY` or `~/.config/darktable-api-mcp/bfl_api_key`. darktable-api on master now, the release branch from 5.8 on (not 5.6). |
