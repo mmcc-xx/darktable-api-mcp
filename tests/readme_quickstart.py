@@ -106,7 +106,8 @@ def adapt(cmd: str, a, harness: str) -> list[str]:
         cmd = cmd.replace("--port 8020", f"--port {a.port}")
         return [f"{cmd} > ~/webapp.log 2>&1 & WEB=$!",
                 f"for i in $(seq 60); do curl -sf http://127.0.0.1:{a.port}/ >/dev/null && break; sleep 1; done",
-                f"curl -sf http://127.0.0.1:{a.port}/ | grep -qi '<html' || {{ cat ~/webapp.log; exit 1; }}",
+                # grep reads it all: grep -q stops at the match and pipefail sees curl's SIGPIPE
+                f"curl -sf http://127.0.0.1:{a.port}/ | grep -i '<html' >/dev/null || {{ cat ~/webapp.log; exit 1; }}",
                 "kill $WEB"]
     return [cmd]
 
