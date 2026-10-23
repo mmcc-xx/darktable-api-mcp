@@ -231,6 +231,7 @@ a server over SSH, with the web app reached through an SSH tunnel
 | `export_photo` | darktable's export of the saved edit to a file (format, size, quality, output pattern, style; the user's export settings otherwise) |
 | `get_blending`, `set_blending` | a module's blending: blend mode, opacity, parametric ranges per channel in the darkroom's units (e.g. denoise only the shadows) |
 | `add_ai_mask` | darktable's AI object mask: points on a subject, outlined into path shapes on a module (needs darktable built with AI, AI enabled) |
+| `list_markers`, `set_marker`, `remove_marker` | named points and areas on a photo (the user draws them in the web app; Claude can mark a spot too), saved with the library, not in the edit. `add_mask`, `ai_fill`, `use_picker` take `marker=name`, `measure_photo` `markers=[...]`, `retouch_spots` a spot's `"marker"` |
 | `add_mask`, `list_masks`, `remove_mask` | drawn shapes (circle, ellipse, gradient, path, brush stroke) on a module, placed on the photo as shown; `set_blending(raster_source=...)` reuses another module's mask |
 | `measure_photo` | values at points and in boxes, the histogram (`channels=True`: per channel) and clipping of the rendered photo |
 | `zone_map` | the rendered photo reduced to Ansel Adams's eleven print values (zones 0-X, steps of 10 in Lab L), with the share of the photo in each zone, zones at points, and chosen zones marked in red (needs the `[dust]` extra) |

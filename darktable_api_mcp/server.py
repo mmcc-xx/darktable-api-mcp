@@ -41,6 +41,8 @@ don't write analysis scripts or install packages.
 Removing objects: ai_fill (an AI model fills a drawn shape, or an
 add_ai_mask outline via like_mask_of, from its surroundings; a composite
 instance, non-destructive). Small spots: retouch_spots.
+Markers: points and areas the user drew and named in the web app
+(list_markers); tools take marker=name instead of coordinates.
 
 The engine is shared with the user's web app and darktable's window:
 open_photo joins an edit already open there (unsaved changes included),
@@ -102,6 +104,89 @@ async def _edit(image_id: int | None, method: str, **params) -> dict:
         return await engine.edit(image_id, method, **params)
     except EngineError as exc:
         raise _err(exc)
+
+
+# ── markers ──────────────────────────────────────────────────────────────────
+
+async def _markers_on_photo(image_id: int | None = None) -> list[dict]:
+    """The photo's markers with their points as fractions of the photo as
+    shown (the engine keeps them in raw space), plus box and center."""
+    await _require("marker_list", "coords")
+    if image_id is None:
+        image_id = engine.image_id
+    if image_id is None:
+        raise ToolError("no photo is open: call open_photo(image_id) first")
+    ms = (await _call("marker_list", imgid=image_id))["markers"]
+    flat = [p for m in ms for p in m["points"]]
+    shown = iter((await _edit(image_id, "coords", points=flat, **{"from": "raw", "to": "image"}))["points"]
+                 if flat else [])
+    out = []
+    for m in ms:
+        pts = [[round(v, 5) for v in next(shown)] for _ in m["points"]]
+        xs, ys = [p[0] for p in pts], [p[1] for p in pts]
+        box = {"left": min(xs), "top": min(ys), "right": max(xs), "bottom": max(ys)}
+        out.append({"name": m["name"], "kind": m["kind"], "points": pts, "box": box,
+                    "center": [round((box["left"] + box["right"]) / 2, 5), round((box["top"] + box["bottom"]) / 2, 5)],
+                    "note": m.get("note", ""), "by": m.get("by", "")})
+    return out
+
+
+async def _marker(name: str) -> dict:
+    """One of the open photo's markers by name (case ignored), as
+    _markers_on_photo gives it; an unknown name lists the photo's."""
+    ms = await _markers_on_photo()
+    for m in ms:
+        if m["name"].casefold() == name.strip().casefold():
+            return m
+    raise ToolError(f"no marker '{name}' on photo {engine.image_id}; it has: "
+                    + (", ".join(f"'{m['name']}'" for m in ms) or "none"))
+
+
+async def _marker_shape(name: str) -> tuple[str, float | None, float | None, list[list[float]] | None]:
+    """A marker as add_mask's (shape, x, y, points): an area a path through
+    its points, a point a circle at it."""
+    m = await _marker(name)
+    if m["kind"] == "point":
+        return "circle", m["points"][0][0], m["points"][0][1], None
+    return "path", None, None, m["points"]
+
+
+@mcp.tool()
+async def list_markers(image_id: int | None = None) -> dict:
+    """The points and areas the user drew and named on a photo in the web
+    app (default: the open photo); refer to them by name, and pass the name
+    as marker= to add_mask, ai_fill, retouch_spots, use_picker, or
+    markers= to measure_photo. Each: name, kind (point, rect, ellipse,
+    outline), points and box {left, top, right, bottom} and center [x, y]
+    (fractions of the photo as shown), note, by (who set it)."""
+    return {"image_id": image_id if image_id is not None else engine.image_id,
+            "markers": await _markers_on_photo(image_id)}
+
+
+@mcp.tool()
+async def set_marker(name: str, kind: str, points: list[list[float]], note: str = "") -> dict:
+    """Mark a spot or area on the open photo and name it, to show the user
+    ("I marked 'dust 3'") and to refer to later; it appears in the web app
+    and replaces a marker of the same name. kind: "point" (1 point), "rect"
+    (4 corners), "ellipse" (8-128 points around it), "outline" (3-500
+    points). points [[x, y], ...]: fractions of the photo as shown. Not
+    part of the edit."""
+    await _require("marker_set", "coords")
+    if engine.image_id is None:
+        raise ToolError("no photo is open: call open_photo(image_id) first")
+    raw, _, _ = await _photo_to_raw(points)
+    r = await _call("marker_set", imgid=engine.image_id, name=name, kind=kind, points=raw, note=note)
+    return {"image_id": r["imgid"], "marker": next(m for m in await _markers_on_photo()
+                                                   if m["name"] == r["marker"]["name"])}
+
+
+@mcp.tool()
+async def remove_marker(name: str) -> dict:
+    """Remove one marker of the open photo by name."""
+    await _require("marker_remove")
+    if engine.image_id is None:
+        raise ToolError("no photo is open: call open_photo(image_id) first")
+    return await _call("marker_remove", imgid=engine.image_id, name=name)
 
 
 def _filters(film_roll_id: int | None, rating: str, label: str | None) -> dict:
@@ -1109,18 +1194,28 @@ async def start_over(confirm: bool = False) -> dict:
 async def measure_photo(points: list[list[float]] | None = None, boxes: list[dict] | None = None,
                         radius: int = 2, size: int = 1024, zoom: float | None = None,
                         center_x: float = 0.5, center_y: float = 0.5, bins: int = 32,
-                        history_step: int | None = None, channels: bool = False) -> dict:
+                        history_step: int | None = None, channels: bool = False,
+                        markers: list[str] | None = None) -> dict:
     """Read the open photo as darktable renders it (display sRGB, as the
     darkroom shows it). points [[x, y], ...] and boxes [{left, top, right,
     bottom}], fractions of the photo: rgb (0-1), lab, luminance min/max
     (radius: the pixel square around a point); null outside the render.
     Also the luminance histogram (% of pixels per bin, dark to light;
     channels=True adds red, green, blue) and the fractions clipped in
-    highlights and shadows. size, zoom, center_x, center_y, history_step as
+    highlights and shadows. markers: names from list_markers (a point
+    reads as a point, an area as its box; the results follow points and
+    boxes). size, zoom, center_x, center_y, history_step as
     render_preview."""
     await _require("sample")
     if engine.image_id is None:
         raise ToolError("no photo is open: call open_photo(image_id) first")
+    points, boxes = list(points or []), list(boxes or [])
+    for name in markers or []:
+        m = await _marker(name)
+        if m["kind"] == "point":
+            points.append(m["points"][0])
+        else:
+            boxes.append(m["box"])
     params: dict[str, Any] = {"width": max(64, min(size, 4096)), "height": max(64, min(size, 4096)),
                               "radius": max(0, min(radius, 200)), "bins": max(2, min(bins, 256)),
                               "points": points or [], "boxes": boxes or []}
@@ -1310,10 +1405,13 @@ async def add_mask(operation: str, shape: str, x: float | None = None, y: float 
                    radius: float = 0.1, radius_y: float | None = None, rotation: float = 0.0,
                    feather: float = 0.05, compression: float = 0.5, points: list[list[float]] | None = None,
                    width: float = 0.03, hardness: float = 0.5, density: float = 1.0,
-                   combine: str = "union", inverted: bool = False, instance: int = 0) -> dict:
+                   combine: str = "union", inverted: bool = False, instance: int = 0,
+                   marker: str | None = None) -> dict:
     """Draw a mask shape on a module so it acts only there (one history
     step). x, y: fractions 0-1 of the photo as shown; radius, feather:
-    fractions of its shorter side.
+    fractions of its shorter side. marker: a name from list_markers instead
+    of shape/x/y/points: an area becomes a path through its points
+    (feather), a point a circle (radius, feather).
     "circle": x, y, radius, feather. "ellipse": also radius_y, rotation
     (degrees). "gradient": a line through x, y at rotation (0 =
     horizontal), compression 0-1 (fade width). "path": a closed outline
@@ -1323,6 +1421,8 @@ async def add_mask(operation: str, shape: str, x: float | None = None, y: float 
     exclusion (darktable master also screen: a soft union, product, sum);
     inverted: act outside it."""
     await _require("mask_add", "coords")
+    if marker:
+        shape, x, y, points = await _marker_shape(marker)
     sh = await _shape_on_raw(shape, x, y, radius, radius_y, rotation, feather, compression, points,
                              width, hardness, density)
     return await _edit(None, "mask_add", operation=operation, instance=instance, shape=sh,
@@ -1506,7 +1606,8 @@ async def ai_fill(shape: str = "circle", x: float | None = None, y: float | None
                   hardness: float = 0.5, density: float = 1.0, like_mask_of: str | None = None,
                   like_mask_instance: int = 0, like_mask_shapes: list[str | int] | None = None,
                   context: float = 0.5, name: str = "fill", model: str = "local",
-                  prompt: str = "", upscale: bool = False, online_size: int = 1024) -> dict:
+                  prompt: str = "", upscale: bool = False, online_size: int = 1024,
+                  marker: str | None = None) -> dict:
     """Remove an object or blemish: an AI inpainting model fills the area
     inside a shape from its surroundings, as a new "composite" instance
     called `name` masked by the shape (undo: enable_module or
@@ -1518,6 +1619,8 @@ async def ai_fill(shape: str = "circle", x: float | None = None, y: float | None
     feather), "ellipse" (+ radius_y, rotation), "path" (points, feather),
     "brush" (points, width, hardness, density). Outline a few pixels
     beyond the object.
+    marker: fill a marker's area from list_markers (a path through its
+    points, feather; a point marker a circle, radius) instead of a shape.
     like_mask_of: fill that module's mask shapes instead (instance
     like_mask_instance; like_mask_shapes: some of them, by name or formid).
     context 0.25-4: surroundings the model sees, in shape sizes (smaller
@@ -1530,6 +1633,9 @@ async def ai_fill(shape: str = "circle", x: float | None = None, y: float | None
     Show a "warning" in the reply to the user as it is; check the fill
     with render_preview(zoom=1)."""
     await _require("ai_fill", "coords")
+    if marker:
+        shape, x, y, points = await _marker_shape(marker)
+        like_mask_of = None
     if shape == "gradient":
         raise ToolError("a gradient cannot be filled: use circle, ellipse, path or brush")
     context = max(0.25, min(float(context), 4.0))
@@ -1623,8 +1729,25 @@ async def retouch_spots(spots: list[dict]) -> dict:
     the shorter side, e.g. 0.01). tool "heal" (default) or "clone":
     source_x, source_y (required); "blur": blur_radius, blur_type
     ("gaussian", "bilateral"); "fill": fill_mode ("erase", "color"),
-    fill_color [r, g, b], fill_brightness (-1..1). Returns the formids."""
+    fill_color [r, g, b], fill_brightness (-1..1). A spot may give
+    "marker": a name from list_markers instead of x, y: its center (radius
+    from the area's size when not given; 0.01 for a point). Returns the
+    formids."""
     await _require("retouch_add", "coords")
+    spots = [dict(sp) for sp in spots]
+    for sp in spots:
+        if sp.get("marker"):
+            m = await _marker(sp.pop("marker"))
+            sp["x"], sp["y"] = m["center"]
+            if "radius" not in sp:
+                if m["kind"] == "point":
+                    sp["radius"] = 0.01
+                else:
+                    g = await _edit(None, "geometry_get")
+                    b = m["box"]
+                    sp["radius"] = round(max((b["right"] - b["left"]) * g["width"],
+                                             (b["bottom"] - b["top"]) * g["height"]) / 2
+                                         / min(g["width"], g["height"]), 5)
     specs = [await _retouch_spec(s, adding=True) for s in spots]
     return await _edit(None, "retouch_add", spots=specs)
 
@@ -2286,7 +2409,8 @@ async def list_pickers(operation: str, instance: int = 0) -> dict:
 
 @mcp.tool()
 async def use_picker(operation: str, control: str, box: dict | None = None, point: list[float] | None = None,
-                     instance: int = 0, wait: bool = True, timeout_s: float = 60) -> dict:
+                     instance: int = 0, wait: bool = True, timeout_s: float = 60,
+                     marker: str | None = None) -> dict:
     """Use a module's picker or auto button (names from list_pickers) as
     clicking it in the darkroom: darktable samples the area and sets the
     module (switched on, one history step). Pickers work on any photo;
@@ -2297,9 +2421,14 @@ async def use_picker(operation: str, control: str, box: dict | None = None, poin
     monochrome "highlights" (filter color from the area).
     box {left, top, right, bottom} or point [x, y], fractions of the photo
     as shown; neither: darktable's default area; buttons take none.
+    marker: a name from list_markers instead (an area gives its bounding
+    box, a point the point).
     Returns result.changed and result.sample (the module's input,
     mean/min/max; result.output_sample: its output)."""
     await _require("picker_apply")
+    if marker:
+        m = await _marker(marker)
+        box, point = (None, m["points"][0]) if m["kind"] == "point" else (m["box"], None)
     params: dict[str, Any] = {"operation": operation, "instance": instance, "control": control}
     if box is not None:
         params["box"] = box
