@@ -1320,7 +1320,8 @@ async def add_mask(operation: str, shape: str, x: float | None = None, y: float 
     through points [[x, y], ...] (3 or more; corners round off), feather.
     "brush": a stroke along points, width (half its thickness), hardness,
     density. combine with earlier shapes: union, intersection, difference,
-    exclusion; inverted: act outside it."""
+    exclusion (darktable master also screen: a soft union, product, sum);
+    inverted: act outside it."""
     await _require("mask_add", "coords")
     sh = await _shape_on_raw(shape, x, y, radius, radius_y, rotation, feather, compression, points,
                              width, hardness, density)
