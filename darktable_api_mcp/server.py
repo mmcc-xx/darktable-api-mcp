@@ -145,13 +145,18 @@ async def _marker(name: str) -> dict:
                     + (", ".join(f"'{m['name']}'" for m in ms) or "none"))
 
 
-async def _marker_shape(name: str) -> tuple[str, float | None, float | None, list[list[float]] | None]:
-    """A marker as add_mask's (shape, x, y, points): an area a path through
-    its points, a point a circle at it."""
+async def _marker_shape(name: str) -> tuple[str, float | None, float | None, list[list[float]] | None, str]:
+    """A marker as add_mask's (shape, x, y, points, corners): an area a path
+    through its points (a rect's with sharp corners), a point a circle at it."""
     m = await _marker(name)
     if m["kind"] == "point":
-        return "circle", m["points"][0][0], m["points"][0][1], None
-    return "path", None, None, m["points"]
+        return "circle", m["points"][0][0], m["points"][0][1], None, "smooth"
+    return "path", None, None, m["points"], "sharp" if m["kind"] == "rect" else "smooth"
+
+
+async def _marker_corners(corners: str) -> str:
+    """A marker's corners, smooth on an engine without sharp ones."""
+    return corners if corners != "sharp" or await engine.supports("mask_add.corners") else "smooth"
 
 
 @mcp.tool()
@@ -1353,7 +1358,7 @@ async def _photo_to_raw(points: list[list[float]]) -> tuple[list[list[float]], i
 async def _shape_on_raw(shape: str, x: float | None, y: float | None, radius: float,
                         radius_y: float | None, rotation: float, feather: float, compression: float,
                         points: list[list[float]] | None, width: float, hardness: float,
-                        density: float) -> dict:
+                        density: float, corners: str | None = None) -> dict:
     """add_mask's arguments (positions and sizes on the photo as shown) as
     the engine's shape dict in raw space."""
     if shape in ("path", "brush"):
@@ -1366,6 +1371,11 @@ async def _shape_on_raw(shape: str, x: float | None, y: float | None, radius: fl
         raw, _, _ = await _photo_to_raw(points)
         _, size = await _photo_circle_to_raw(points[0][0], points[0][1], width if brush else feather)
         sh: dict[str, Any] = {"type": shape, "points": raw}
+        if corners not in (None, "smooth", "sharp"):
+            raise ToolError('corners: "smooth" or "sharp"')
+        if corners == "sharp":
+            await _require("mask_add.corners")
+            sh["corners"] = "sharp"
         if brush:
             sh.update(width=size, hardness=hardness, density=density)
         else:
@@ -1409,7 +1419,7 @@ async def add_mask(operation: str, shape: str, x: float | None = None, y: float 
                    feather: float = 0.05, compression: float = 0.5, points: list[list[float]] | None = None,
                    width: float = 0.03, hardness: float = 0.5, density: float = 1.0,
                    combine: str = "union", inverted: bool = False, instance: int = 0,
-                   marker: str | None = None) -> dict:
+                   marker: str | None = None, corners: str | None = None) -> dict:
     """Draw a mask shape on a module so it acts only there (one history
     step). x, y: fractions 0-1 of the photo as shown; radius, feather:
     fractions of its shorter side. marker: a name from list_markers instead
@@ -1418,16 +1428,18 @@ async def add_mask(operation: str, shape: str, x: float | None = None, y: float 
     "circle": x, y, radius, feather. "ellipse": also radius_y, rotation
     (degrees). "gradient": a line through x, y at rotation (0 =
     horizontal), compression 0-1 (fade width). "path": a closed outline
-    through points [[x, y], ...] (3 or more; corners round off), feather.
-    "brush": a stroke along points, width (half its thickness), hardness,
-    density. combine with earlier shapes: union, intersection, difference,
+    through points [[x, y], ...] (3 or more), feather; corners "smooth"
+    (default: rounds off through the points) or "sharp" (a polygon; a rect
+    marker's default). "brush": a stroke along points, width (half its
+    thickness), hardness, density; corners as path (sharp: a polyline). combine with earlier shapes: union, intersection, difference,
     exclusion (darktable master also screen: a soft union, product, sum);
     inverted: act outside it."""
     await _require("mask_add", "coords")
     if marker:
-        shape, x, y, points = await _marker_shape(marker)
+        shape, x, y, points, mcorners = await _marker_shape(marker)
+        corners = corners or await _marker_corners(mcorners)
     sh = await _shape_on_raw(shape, x, y, radius, radius_y, rotation, feather, compression, points,
-                             width, hardness, density)
+                             width, hardness, density, corners)
     return await _edit(None, "mask_add", operation=operation, instance=instance, shape=sh,
                        combine=combine, inverted=inverted)
 
@@ -1610,7 +1622,7 @@ async def ai_fill(shape: str = "circle", x: float | None = None, y: float | None
                   like_mask_instance: int = 0, like_mask_shapes: list[str | int] | None = None,
                   context: float = 0.5, name: str = "fill", model: str = "local",
                   prompt: str = "", upscale: bool = False, online_size: int = 1024,
-                  marker: str | None = None) -> dict:
+                  marker: str | None = None, corners: str | None = None) -> dict:
     """Remove an object or blemish: an AI inpainting model fills the area
     inside a shape from its surroundings, as a new "composite" instance
     called `name` masked by the shape (undo: enable_module or
@@ -1619,9 +1631,9 @@ async def ai_fill(shape: str = "circle", x: float | None = None, y: float | None
     darktable master or 5.8 on, with AI and an inpaint model.
 
     shape as add_mask, on the photo as shown: "circle" (x, y, radius,
-    feather), "ellipse" (+ radius_y, rotation), "path" (points, feather),
-    "brush" (points, width, hardness, density). Outline a few pixels
-    beyond the object.
+    feather), "ellipse" (+ radius_y, rotation), "path" (points, feather,
+    corners "smooth" or "sharp"), "brush" (points, width, hardness,
+    density). Outline a few pixels beyond the object.
     marker: fill a marker's area from list_markers (a path through its
     points, feather; a point marker a circle, radius) instead of a shape.
     like_mask_of: fill that module's mask shapes instead (instance
@@ -1637,7 +1649,8 @@ async def ai_fill(shape: str = "circle", x: float | None = None, y: float | None
     with render_preview(zoom=1)."""
     await _require("ai_fill", "coords")
     if marker:
-        shape, x, y, points = await _marker_shape(marker)
+        shape, x, y, points, mcorners = await _marker_shape(marker)
+        corners = corners or await _marker_corners(mcorners)
         like_mask_of = None
     if shape == "gradient":
         raise ToolError("a gradient cannot be filled: use circle, ellipse, path or brush")
@@ -1654,7 +1667,7 @@ async def ai_fill(shape: str = "circle", x: float | None = None, y: float | None
         sh: dict[str, Any] = {"type": "group", "members": members}
     else:
         sh = await _shape_on_raw(shape, x, y, radius, radius_y, rotation, feather, 0.5, points,
-                                 width, hardness, density)
+                                 width, hardness, density, corners)
     r = await _ai_fill(None, sh, context, name, model, prompt, upscale, online_size)
     if r.get("warning"):
         r["warning"] = f"Tell the user: {r['warning']}"
