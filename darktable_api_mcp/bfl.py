@@ -24,7 +24,8 @@ from pathlib import Path
 
 import httpx
 
-API = "https://api.bfl.ai/v1"
+# BFL_API_URL: another endpoint, e.g. a test's fake server
+API = os.environ.get("BFL_API_URL", "https://api.bfl.ai/v1").rstrip("/")
 # the MCP's model names: BFL's endpoint and the name a fill is recorded with
 MODELS = {"flux": ("flux-pro-1.0-fill", "FLUX.1 Fill [pro]"),
           "flux-erase": ("flux-tools/erase-v1", "FLUX Erase"),

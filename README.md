@@ -320,6 +320,7 @@ photos are only read.
 | `DTAPI_VARIANTS_DIR` | default: `~/.cache/darktable-api-mcp/variants` | where `propose_alternatives` renders the alternatives (the web app serves them from there: set it the same for both) |
 | `DTAPI_FILLS_DIR` | default: unset, a `darktable_fills` folder beside each photo | where `ai_fill` (and `heal_dust_spots`' fills) write their patch TIFFs: set it for a library copy, whose photos are someone's originals |
 | `BFL_API_KEY` | optional; else `~/.config/darktable-api-mcp/bfl_api_key` | your Black Forest Labs key, for `ai_fill`'s online FLUX models only |
+| `BFL_API_URL` | optional; default https://api.bfl.ai/v1 | Black Forest Labs' API address (tests point it at a fake server) |
 | `DTAPI_GUI_BIN` | default: `darktable` next to `DTAPI_BIN` | the only darktable `takeover_library` may quit |
 
 ### Claude Code
