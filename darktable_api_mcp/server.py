@@ -31,6 +31,9 @@ means library id 36. One photo is current at a time (the last open_photo).
 Scene-referred order: exposure (subject midtones), white balance in color
 calibration (channelmixerrgb), one tone mapper (agx; sigmoid/filmicrgb on
 older edits; never two), then toneequal and colorbalancergb.
+Film emulation: spektrafilm (darktable 5.8+), a spectral film and print
+simulation that is itself the tone mapper: switch agx/sigmoid/filmicrgb
+off when using it. Choose a stock with its presets (list_presets).
 Black and white: add_module_instance("channelmixerrgb") (new, not a copy),
 apply_preset a "monochrome | ..." preset to it, keep the first instance for
 white balance; for creative B&W move_module it after the tone mapper.
