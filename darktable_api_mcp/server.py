@@ -1557,9 +1557,22 @@ async def _ai_fill(image_id: int | None, shape: dict, context: float, name: str,
         inst = r["instance"]
         try:
             info = await bfl.fill(model, Path(r["image"]), Path(r["mask"]), work / "filled.png", prompt)
-            out = await _edit(image_id, "ai_fill", instance=inst, filled=str(work / "filled.png"),
-                              model=f"{bfl.MODELS[model][1]} (Black Forest Labs)", context=context,
-                              upscale=upscale, **extra)
+            fargs = dict(instance=inst, filled=str(work / "filled.png"),
+                         model=f"{bfl.MODELS[model][1]} (Black Forest Labs)", context=context,
+                         upscale=upscale, **extra)
+            if await engine.supports("ai_fill.background"):
+                # the upscale is minutes on a CPU: a job, which the engine
+                # has read the PNG for already
+                ev = await _run_job(lambda: _edit(image_id, "ai_fill", background=True, **fargs), True, 1800)
+                state = ev.get("state")
+                if state == "running":
+                    return {**ev, "bfl": info,
+                            "note": "the fill is still being upscaled: job_status(job) later; it places itself"}
+                if state != "done":
+                    raise ToolError(ev.get("error") or f"the fill job ended {state}")
+                out = ev["result"]
+            else:
+                out = await _edit(image_id, "ai_fill", **fargs)
         except BaseException:
             # the instance crop_to set up has no patch: take it away again
             try:
@@ -1643,7 +1656,8 @@ async def ai_fill(shape: str = "circle", x: float | None = None, y: float | None
     model "local" (LaMa, free, seconds), or online at Black Forest Labs,
     only when the user agreed to upload crops: "flux-erase", "flux"
     (prompt describes the scene), "flux3" (prompt: what to remove);
-    online_size, upscale. The darktable-cleanup skill says which model,
+    online_size, upscale (the upscaler runs as a background job, minutes
+    on a CPU; the tool waits for it). The darktable-cleanup skill says which model,
     and which shapes are too large to fill well.
     Show a "warning" in the reply to the user as it is; check the fill
     with render_preview(zoom=1)."""
