@@ -875,7 +875,8 @@ async def crop_photo(left: float | None = None, top: float | None = None, right:
 
 @mcp.tool(structured_output=False)
 async def render_preview(size: int = 800, uncropped: bool = False, zoom: float | None = None,
-                         center_x: float = 0.5, center_y: float = 0.5, history_step: int | None = None) -> Image:
+                         center_x: float = 0.5, center_y: float = 0.5, history_step: int | None = None,
+                         show_mask: str | None = None, show_mask_instance: int = 0) -> Image:
     """darktable's render of the open photo with its current edit, fitted
     in size x size. Images are costly (every later request re-reads them):
     when a number answers the question (a color, a level, clipping), use
@@ -883,14 +884,23 @@ async def render_preview(size: int = 800, uncropped: bool = False, zoom: float |
     zoom: a size x size region at this scale (1 = 100%, up to 2) around
     center_x, center_y (fractions). uncropped=True: without the crop
     module's crop (the frame crop_photo uses). history_step: the edit
-    after that many steps (0 = the original)."""
+    after that many steps (0 = the original).
+    show_mask: a module (operation, with show_mask_instance) whose mask to
+    show, as the darkroom's "display mask" does: yellow where the module
+    acts (its strength), over a gray image. One render settles a
+    parametric range or a feather: use it after add_mask or set_blending
+    instead of judging the effect, e.g. render_preview(show_mask="exposure",
+    show_mask_instance=1). The module must be on and have a mask."""
     if engine.image_id is None:
         raise ToolError("no photo is open: call open_photo(image_id) first")
     region = None
+    if show_mask is not None:
+        await _require("render.show_mask")
+        region = {"show_mask": {"operation": show_mask, "instance": show_mask_instance}}
     if zoom is not None:
         await _require("render.zoom")
-        region = {"zoom": max(0.01, min(zoom, 2.0)), "center_x": min(max(center_x, 0.0), 1.0),
-                  "center_y": min(max(center_y, 0.0), 1.0)}
+        region = dict(region or {}, zoom=max(0.01, min(zoom, 2.0)), center_x=min(max(center_x, 0.0), 1.0),
+                      center_y=min(max(center_y, 0.0), 1.0))
     if history_step is not None:
         await _require("render.history_end")
         region = dict(region or {}, history_end=max(0, history_step))
@@ -901,6 +911,9 @@ async def render_preview(size: int = 800, uncropped: bool = False, zoom: float |
         raise _err(exc)
     if r is None:
         raise ToolError("overtaken by a newer render request")
+    if show_mask is not None and r[1].get("mask_shown") is False:
+        raise ToolError(f"{show_mask} instance {show_mask_instance}'s mask is the same everywhere "
+                        "(a drawn mask with no shapes, or a range that takes everything): nothing to show")
     return Image(data=r[0], format="jpeg")
 
 
