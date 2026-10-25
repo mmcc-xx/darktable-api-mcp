@@ -1821,6 +1821,198 @@ async def remove_retouch_spots(formids: list[int]) -> dict:
     return await _edit(None, "retouch_remove", formids=formids)
 
 
+# ── red eye ──────────────────────────────────────────────────────────────────
+
+async def _render_rgb(size: int = 2000):
+    """The open photo as darktable renders it: float RGB 0-1, H x W x 3."""
+    import cv2
+    import numpy as np
+    r = await engine.render(engine.image_id, size, size, False, None)
+    if r is None:
+        raise ToolError("overtaken by a newer render request")
+    im = cv2.imdecode(np.frombuffer(r[0], np.uint8), cv2.IMREAD_COLOR)
+    return im[:, :, ::-1].astype(np.float32) / 255.0
+
+
+def _red_blobs(rgb, box: dict) -> list[dict]:
+    """Round red blobs (r > 1.5 max(g, b)) in a box of the render: the two
+    largest, as {x, y, radius} on the photo (radius: fraction of its
+    shorter side)."""
+    import cv2
+    import numpy as np
+    h, w = rgb.shape[:2]
+    x0, x1 = int(max(0.0, box["left"]) * w), int(min(1.0, box["right"]) * w)
+    y0, y1 = int(max(0.0, box["top"]) * h), int(min(1.0, box["bottom"]) * h)
+    crop = rgb[y0:y1, x0:x1]
+    if crop.size == 0:
+        return []
+    red = (crop[..., 0] > 1.5 * np.maximum(crop[..., 1], crop[..., 2])) & (crop[..., 0] > 0.15)
+    red = cv2.morphologyEx(red.astype(np.uint8), cv2.MORPH_CLOSE, np.ones((3, 3), np.uint8))
+    n, _lab, stats, cent = cv2.connectedComponentsWithStats(red, connectivity=8)
+    blobs = []
+    for i in range(1, n):
+        bw, bh, area = stats[i, cv2.CC_STAT_WIDTH], stats[i, cv2.CC_STAT_HEIGHT], stats[i, cv2.CC_STAT_AREA]
+        if area < 6 or not 0.5 <= bw / bh <= 2.0 or area / (bw * bh) < 0.55:
+            continue                          # a speck, a streak or a ragged patch: not a pupil
+        r = (area / np.pi) ** 0.5
+        blobs.append({"x": (x0 + cent[i][0]) / w, "y": (y0 + cent[i][1]) / h, "area_px": int(area),
+                      "radius": float(r) * 1.25 / min(w, h)})
+    blobs.sort(key=lambda b: -b["area_px"])
+    return blobs[:2]
+
+
+def _pupil_stats(rgb, x: float, y: float, radius: float):
+    """(median red chroma r - max(g, b), brightest low-chroma point (x, y,
+    luminance) or None) inside a disc of the render."""
+    import numpy as np
+    h, w = rgb.shape[:2]
+    rr = max(2.0, radius * min(w, h))
+    cx, cy = x * w, y * h
+    ys, xs = np.mgrid[max(0, int(cy - rr)):min(h, int(cy + rr) + 1), max(0, int(cx - rr)):min(w, int(cx + rr) + 1)]
+    inside = (xs - cx) ** 2 + (ys - cy) ** 2 <= rr * rr
+    px = rgb[ys, xs][inside]
+    if not len(px):
+        return 0.0, None
+    chroma = px[:, 0] - px[:, 1:].max(1)
+    lum = px @ np.array([0.2126, 0.7152, 0.0722], np.float32)
+    low = chroma < 0.15
+    catch = None
+    if low.any():
+        k = int(np.argmax(np.where(low, lum, -1)))
+        catch = (float(xs[inside][k] / w), float(ys[inside][k] / h), float(lum[k]))
+    return float(np.median(chroma)), catch
+
+
+@mcp.tool()
+async def fix_red_eye(marker: str | None = None, points: list[list[float]] | None = None,
+                      method: str = "auto", radius: float | None = None) -> dict:
+    """Remove red eye (a flash reflected from the retina) on the open
+    photo. Name the eyes: points [[x, y], ...] one per eye (fractions of
+    the photo as shown), or marker (list_markers): a point marker is one
+    eye, an area marker a box to search: the tool finds the red round
+    pupils in it (the two largest). radius: the pupil's radius as a
+    fraction of the photo's shorter side (default 0.012, or what the
+    search measured).
+
+    method "desaturate": a new color balance rgb instance called "red eye"
+    takes the colour out and darkens, masked by a circle on each pupil AND
+    a parametric range on red hue and chroma, so a catchlight (bright,
+    unsaturated) and the iris stay. "fill": the local AI model (LaMa)
+    fills each pupil, then a dark spot restores the pupil and a small
+    one the catchlight; for blown pink-white pupils with no red left.
+    "flux": as fill with the online FLUX model (costs credits, sends the
+    crop online: only when the user asked). "auto" (default): red pupils
+    are desaturated, blown ones filled; the reply says which.
+
+    A pet's eyeshine (green, yellow, white) is not red: use method="fill"
+    (or "flux" when the user asks). Check with render_preview(zoom=1) at
+    each eye. The edit is unsaved until save. Returns method, eyes (x, y,
+    area, shape), instance, formids, hint."""
+    import math
+    if method not in ("auto", "desaturate", "fill", "flux"):
+        raise ToolError('method: "auto", "desaturate", "fill" or "flux"')
+    if engine.image_id is None:
+        raise ToolError("no photo is open: call open_photo(image_id) first")
+    await _require("mask_add", "coords")
+    rgb = None
+    eyes: list[dict] = []
+    if points:
+        for p in points:
+            if len(p) != 2:
+                raise ToolError("points: [[x, y], ...] fractions of the photo")
+            eyes.append({"x": float(p[0]), "y": float(p[1]), "radius": radius})
+    elif marker:
+        m = await _marker(marker)
+        if m["kind"] == "point":
+            eyes.append({"x": m["points"][0][0], "y": m["points"][0][1], "radius": radius})
+        else:
+            rgb = await _render_rgb()
+            b = m["box"]
+            eyes = [dict(e, radius=radius or e["radius"]) for e in _red_blobs(rgb, b)]
+            if not eyes:
+                raise ToolError(f"no red round pupil found in marker '{marker}' (box {b['left']:.3f}-{b['right']:.3f} "
+                                f"x {b['top']:.3f}-{b['bottom']:.3f}): give points=[[x, y], ...] on the eyes")
+    else:
+        raise ToolError("name the eyes: points=[[x, y], ...] (one per eye) or marker=<a point or an area to search>")
+    for e in eyes:
+        if not (0.0 <= e["x"] <= 1.0 and 0.0 <= e["y"] <= 1.0):
+            raise ToolError("points are fractions 0-1 of the photo")
+        e["radius"] = max(0.002, min(float(e["radius"] or 0.012), 0.2))
+    chosen = method
+    if method == "auto":
+        rgb = rgb if rgb is not None else await _render_rgb()
+        red = [_pupil_stats(rgb, e["x"], e["y"], e["radius"] * 0.8)[0] for e in eyes]
+        chosen = "desaturate" if sum(red) / len(red) > 0.12 else "fill"
+    g = await _edit(None, "geometry_get")
+    W, H = g["width"], g["height"]
+    short = min(W, H)
+    result: dict[str, Any] = {"method": chosen, "eyes": [], "instance": None, "formids": []}
+
+    if chosen == "desaturate":
+        await _require("module_add", "module_rename", "blend_set")
+        inst = (await _edit(None, "module_add", operation="colorbalancergb", instance=0, copy=False))["instance"]
+        await _edit(None, "module_set", operation="colorbalancergb", instance=inst,
+                    values={"chroma_global": -1.0, "saturation_global": -1.0, "brilliance_global": -0.5})
+        await _edit(None, "module_rename", operation="colorbalancergb", instance=inst, name="red eye")
+        for e in eyes:
+            circle = math.pi * e["radius"] ** 2 * short * short / (W * H)
+            shape, area, fid = "circle", circle, None
+            if await engine.supports("mask_ai"):
+                try:
+                    r = await add_ai_mask("colorbalancergb", [[e["x"], e["y"]]], instance=inst)
+                    if 0.4 * circle <= r.get("area", 0) <= 4 * circle:
+                        shape, area, fid = "ai", r["area"], r.get("formid")
+                    elif r.get("formid") is not None:       # a catchlight alone, or the whole face
+                        await remove_mask("colorbalancergb", r["formid"], instance=inst)
+                except ToolError:
+                    pass                         # no AI model here: the circle
+            if shape == "circle":
+                r = await add_mask("colorbalancergb", "circle", e["x"], e["y"], radius=e["radius"],
+                                   feather=e["radius"] * 0.3, instance=inst)
+                fid = r.get("formid")
+            result["eyes"].append({"x": round(e["x"], 4), "y": round(e["y"], 4), "area": round(area, 6), "shape": shape})
+            if fid is not None:
+                result["formids"].append(fid)
+        # drawn AND parametric: darktable's "exclusive" combine; red is hue
+        # ~ 0-70 deg in JzCzhz, so the range is the red arc through 0 (given
+        # inverted: everything but the arc from 80 to 330); Cz is 0-100 there,
+        # the floor of 3-8 leaves out a catchlight and gray
+        await _edit(None, "blend_set", operation="colorbalancergb", instance=inst, values={
+            "masks": "drawn & parametric", "combine": "exclusive", "feathering_radius": 2.0,
+            "parametric": {"hz_in": {"range": [80, 100, 310, 330], "inverted": True},
+                           "Cz_in": {"range": [3, 8, 100, 100]}}})
+        result["instance"] = inst
+        result["hint"] = ("render_preview(zoom=1) at an eye; a pupil still pink: widen it with radius, or "
+                          "method='fill'; show_mask='colorbalancergb' with show_mask_instance shows the mask")
+        return result
+
+    # fill / flux: the local or online model fills each pupil, a dark spot
+    # then makes it a pupil and a small bright one is the catchlight
+    model = "flux" if chosen == "flux" else "local"
+    prompt = "natural dark pupil with a small catchlight" if model == "flux" else ""
+    await _require("ai_fill", "retouch_add")
+    rgb = rgb if rgb is not None else await _render_rgb()
+    spots = []
+    for e in eyes:
+        _c, catch = _pupil_stats(rgb, e["x"], e["y"], e["radius"])
+        sh = await _shape_on_raw("circle", e["x"], e["y"], e["radius"], None, 0.0, e["radius"] * 0.3, 0.5,
+                                 None, 0.03, 0.5, 1.0)
+        r = await _ai_fill(None, sh, 2.0, "red eye", model, prompt, False, 1024)
+        result["instance"] = r.get("instance", result["instance"])
+        spots.append({"x": e["x"], "y": e["y"], "radius": e["radius"] * 0.85, "tool": "fill",
+                      "fill_mode": "color", "fill_color": [0.03, 0.03, 0.03]})
+        if catch and catch[2] > 0.75:
+            spots.append({"x": catch[0], "y": catch[1], "radius": max(0.0015, e["radius"] * 0.18),
+                          "tool": "fill", "fill_mode": "color", "fill_color": [0.95, 0.95, 0.95]})
+        area = math.pi * e["radius"] ** 2 * short * short / (W * H)
+        result["eyes"].append({"x": round(e["x"], 4), "y": round(e["y"], 4), "area": round(area, 6), "shape": "circle"})
+    rr = await retouch_spots(spots)
+    result["formids"] = rr.get("formids") or rr.get("spots") or []
+    result["hint"] = ("render_preview(zoom=1) at each eye; the fill is an instance called 'red eye' "
+                      "(enable_module off to undo), the pupil and catchlight are retouch spots")
+    return result
+
+
 # ── styles and copy/paste ────────────────────────────────────────────────────
 
 @mcp.tool()
