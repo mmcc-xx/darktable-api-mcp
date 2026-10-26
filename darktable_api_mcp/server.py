@@ -2334,7 +2334,10 @@ async def check_sensor_clipping(image_id: int | None = None) -> dict:
     level per color, and each color's headroom (how far its brightest 0.1%
     is below clipping, in EV). Clipped on the sensor: only the highlights
     module can rebuild it; merely bright in the render: recoverable with
-    exposure or the tone mapper. Needs the [dust] extra (rawpy)."""
+    exposure or the tone mapper. Also the share of 2x2 blocks fully clipped
+    (all_clipped_pct) and blocked_shadows_pct: shadows more than ~12 EV below
+    white at base ISO (less at higher ISO) are noise even after denoise, a
+    +3 EV push won't bring detail back. Needs the [dust] extra (rawpy)."""
     import math
     try:
         import numpy as np
@@ -2345,8 +2348,10 @@ async def check_sensor_clipping(image_id: int | None = None) -> dict:
         image_id = engine.image_id
     if image_id is None:
         raise ToolError("give image_id, or open a photo first")
-    info = (await _call("image_info", imgid=image_id))["image"]
+    reply = await _call("image_info", imgid=image_id)
+    info = reply["image"]
     path = str(Path(info["folder"]) / info["filename"])
+    iso = (reply.get("exif") or {}).get("iso")
 
     def measure() -> dict:
         with rawpy.imread(path) as raw:
@@ -2379,7 +2384,13 @@ async def check_sensor_clipping(image_id: int | None = None) -> dict:
         raise ToolError(f"couldn't read {path} as a raw file: {exc}")
     worst = max(v["clipped_pct"] for v in channels.values())
     clipped = [ch for ch, v in channels.items() if v["clipped_pct"] >= 0.01]
+    try:
+        from . import clipping
+        blocks = (await asyncio.to_thread(clipping.measure, path, iso))["shares"]
+    except Exception:
+        blocks = {}
     return {"image_id": image_id, "file": path, "channels": channels, "sensor_clipped": bool(clipped),
+            **{k: blocks[k] for k in ("all_clipped_pct", "blocked_shadows_pct") if k in blocks},
             "verdict": (f"sensor saturated in {', '.join(clipped)} ({worst:.2f}% of photosites at worst): that "
                         "detail wasn't recorded; highlight reconstruction can only fill it in"
                         if clipped else
