@@ -43,7 +43,7 @@ propose_alternatives. Measure with measure_photo / render_preview(zoom=...);
 don't write analysis scripts or install packages.
 Removing objects: ai_fill (an AI model fills a drawn shape, or an
 add_ai_mask outline via like_mask_of, from its surroundings; a composite
-instance, non-destructive). Small spots: retouch_spots.
+instance, non-destructive). Small spots: retouch_spots. Red eye: fix_red_eye.
 Markers: points and areas the user drew and named in the web app
 (list_markers); tools take marker=name instead of coordinates.
 
