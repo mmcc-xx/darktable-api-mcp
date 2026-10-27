@@ -217,6 +217,7 @@ a server over SSH, with the web app reached through an SSH tunnel
 | `open_photo` | open a photo for editing (joins an edit already open in another app, unsaved changes included) |
 | `open_in_darkroom`, `get_collection` | switch darktable's darkroom to a photo (needs darktable's window); the photos darktable's lighttable shows, and the selection |
 | `check_sensor_clipping` | real sensor clipping, from the raw file, per color, with each color's headroom (needs the `[dust]` extra) |
+| `make_panorama` | stitch photos with Hugin (needs its command-line tools: `DTAPI_HUGIN_BIN` or `~/.local/hugin/bin`): first call returns what would make seams show (lens correction, white balance, per-frame tone mapping ...) and a question; the second, with `fixes`, stitches virtual copies into a 16-bit Deflate TIFF beside the frames, imported, tagged `panorama\|from ...` and grouped |
 | `open_darkroom_photo` | open the photo the user has open in darktable's darkroom (needs darktable's window) |
 | `list_modules`, `get_module` | the photo's modules; a module's changed settings with defaults, ranges and dropdown values, the rest by value (`full=True`: all details) |
 | `auto_capture_sharpen` | capture sharpening on, radius and threshold measured on this photo |

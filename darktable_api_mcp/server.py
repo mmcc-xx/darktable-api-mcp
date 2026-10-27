@@ -19,6 +19,7 @@ from typing import Any
 from mcp.server.fastmcp import FastMCP, Image
 from mcp.server.fastmcp.exceptions import ToolError
 
+from . import panorama
 from .engine import EngineError, engine
 
 INSTRUCTIONS = """\
@@ -41,6 +42,8 @@ When the user asks what you changed, use compare_before_after (mark_before
 starts a new "before"). For choices (crops, filters, looks) use
 propose_alternatives. Measure with measure_photo / render_preview(zoom=...);
 don't write analysis scripts or install packages.
+Panoramas: make_panorama, two steps (first call without fixes returns the
+prerequisites report: show it and ask; then call again with the answer's fixes).
 Removing objects: ai_fill (an AI model fills a drawn shape, or an
 add_ai_mask outline via like_mask_of, from its surroundings; a composite
 instance, non-destructive). Small spots: retouch_spots. Red eye: fix_red_eye.
@@ -2621,6 +2624,44 @@ async def check_sensor_clipping(image_id: int | None = None) -> dict:
                         if clipped else
                         "no significant sensor saturation: bright areas in the render are recoverable with "
                         "the tone mapper, exposure or tone equalizer")}
+
+
+@mcp.tool()
+async def make_panorama(photo_ids: list[int], fixes: dict | None = None, projection: str = "auto",
+                        match_edits_from: int | None = None, crop: bool = True, in_order: bool = False,
+                        name: str | None = None, folder: str | None = None,
+                        apply_to_originals: bool = False) -> dict:
+    """Stitch photos into a panorama with Hugin. Two steps. First call
+    without fixes: it returns the prerequisites report (missing lens
+    correction or highlight reconstruction, white balance or exposure that
+    differs, per-frame looks such as a tone mapper or tone equalizer that
+    make seams show, masks) plus a question and the answers' fixes. Show it
+    to the user, ask the question, then call again with the chosen answer's
+    fixes ({"add_missing": bool, "remove_unwanted": bool, "move_to_panorama":
+    bool}). Everything is done on virtual copies used only for the export and
+    removed afterwards: the frames and their edits are not changed (unless
+    apply_to_originals=True). match_edits_from: the frame whose white
+    balance, exposure ... the others get. projection: auto (cylindrical),
+    rectilinear, cylindrical, equirectangular. crop=True cuts to the filled
+    rectangle. in_order=True when the frames are in shooting order along one
+    row: the retry when matching fails on skies or water. Writes
+    <first frame>-pano.tif beside the frames (or in folder), 16-bit, Deflate
+    (lossless), roughly 200-400 MB for 3 frames before compression, plus a
+    small .pto showing the alignment; imported, tagged panorama|from ...,
+    grouped with its frames as leader. Takes a minute or a few. The result
+    is a new photo to edit like any other (open_photo). Needs Hugin's
+    command-line tools (DTAPI_HUGIN_BIN or ~/.local/hugin/bin)."""
+    await _require("export.bpp", "image_duplicate", "history_paste")
+    try:
+        if fixes is None:
+            return await panorama.check(engine, photo_ids, match_edits_from)
+        return await panorama.stitch(engine, photo_ids, fixes=fixes, projection=projection,
+                                     match_edits_from=match_edits_from, crop=crop, in_order=in_order, name=name,
+                                     folder=folder, apply_to_originals=apply_to_originals)
+    except panorama.PanoramaError as exc:
+        raise ToolError(str(exc))
+    except EngineError as exc:
+        raise _err(exc)
 
 
 # ── background jobs ──────────────────────────────────────────────────────────
