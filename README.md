@@ -219,6 +219,7 @@ a server over SSH, with the web app reached through an SSH tunnel
 | `check_sensor_clipping` | real sensor clipping, from the raw file, per color, with each color's headroom (needs the `[dust]` extra) |
 | `open_darkroom_photo` | open the photo the user has open in darktable's darkroom (needs darktable's window) |
 | `list_modules`, `get_module` | the photo's modules; a module's changed settings with defaults, ranges and dropdown values, the rest by value (`full=True`: all details) |
+| `auto_capture_sharpen` | capture sharpening on, radius and threshold measured on this photo |
 | `set_module`, `enable_module` | change settings by name (checked, all or nothing), lists whole or by element (`grey[1]`), module on/off; `preview=True` / `measure={...}` (also on `apply_preset`, `set_blending`, `set_curve`, `crop_photo`) return the render or readout in the same call |
 | `list_presets`, `apply_preset` | a module's presets, applied as darktable's presets menu does (e.g. "monochrome \| luminance-based") |
 | `get_history`, `set_history_end` | history steps; undo/redo to a step |

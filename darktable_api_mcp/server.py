@@ -87,7 +87,7 @@ async def _require(*names: str) -> None:
 # methods that change an edit: the first one on a photo marks compare_before_after's "before"
 _EDIT_METHODS = {"module_set", "module_enable", "preset_apply", "blend_set", "curve_set", "geometry_set",
                  "mask_add", "mask_ai", "mask_remove", "retouch_heal", "retouch_add", "retouch_set",
-                 "retouch_remove", "module_add", "module_remove", "module_move", "module_rename", "ai_fill"}
+                 "retouch_remove", "module_add", "module_remove", "module_move", "module_rename", "ai_fill", "capture_autotune"}
 _before: dict[int, int] = {}    # photo -> history step before your first edit of it
 
 
@@ -671,6 +671,26 @@ async def enable_module(operation: str, enabled: bool, instance: int = 0,
     preview, measure as set_module."""
     return await _and_look(await _edit(None, "module_enable", operation=operation, enabled=enabled,
                                        instance=instance), preview, measure)
+
+
+@mcp.tool()
+async def auto_capture_sharpen() -> dict:
+    """Turn on capture sharpening on the open photo with a radius and noise
+    threshold measured on this photo. Capture sharpening is a deconvolution
+    inside the demosaic module that restores detail lost to the lens and the
+    sensor's anti-aliasing filter (darktable 5.4+). This measures the
+    radius and threshold the way darktable's reset button by the radius does,
+    sets cs_enabled, cs_radius and cs_thrs, and returns the values. Raw
+    photos only, in color. About 1 s for 16 MP. One undoable edit, unsaved
+    until save. Check the result at 100 % (render_preview zoom=1).
+    Downsides: it sharpens noise too (look at high-ISO photos), too big a
+    radius gives halos, it cannot fix missed focus or motion blur, and don't
+    stack it with other strong sharpening (diffuse or sharpen "sharpen"
+    presets, the sharpen module).
+    Auto-apply setup: a demosaic preset with capture sharpening on and
+    radius 0, auto-applied, is measured per photo on its first save."""
+    await _require("capture_autotune")
+    return await _edit(None, "capture_autotune")
 
 
 @mcp.tool()

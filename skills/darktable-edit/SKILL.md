@@ -149,9 +149,9 @@ contrast. Use it for sky vs. foreground, backlit faces, deep shadows.
 - **Lens correction** (`lens`): usually auto-applied; check it's on if
   the lens is known. Don't combine its TCA correction with raw chromatic
   aberrations.
-- **Capture sharpening**: `set_module("demosaic", {"cs_enabled": true})`;
-  `cs_radius` 0.8–1.3 if the default looks soft. Judge at
-  `render_preview(zoom=1)`.
+- **Capture sharpening** (demosaic): `auto_capture_sharpen` measures the
+  radius for this photo and turns it on; prefer it to guessing `cs_radius`.
+  Judge at `render_preview(zoom=1)`.
 - **Detail / clarity**: contrast equalizer (`atrous`) or diffuse or
   sharpen (`diffuse`) presets ("local contrast", "lens deblur").
 - **Noise** (high ISO, lifted shadows): denoise (profiled)
