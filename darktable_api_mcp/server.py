@@ -54,7 +54,20 @@ window serves the library, its darkroom photo (library_status:
 darkroom_imgid; open_darkroom_photo) is usually "this photo"; most pickers
 (use_picker) work only on it. While the library is released to darktable's
 GUI, only library_status, acquire_library and takeover_library work. Tell
-the user what you are doing."""
+the user what you are doing.
+
+Cost: every request re-reads the whole conversation, renders included.
+Adjust with measure_photo and look once per finished step (preview=True on
+the edit, default size; zoom for detail). After two failed tries at one
+fix, change the approach or ask; don't push the strength or retry. Hand a
+cheaper agent only edits whose values are already decided (paste_edit,
+styles, batches); looks, local edits and object removal stay here. You
+can't run /clear or /compact, so suggest them in one line at the end of a
+reply, without holding up the request: /clear when the user moves to
+another photo (the edit lives in the library, nothing here is needed);
+/compact before a new round of changes on the same photo once the
+conversation holds about 10 renders, naming what to keep (photo id, the
+look wanted, what the user liked and rejected, approaches that failed)."""
 
 mcp = FastMCP("darktable-api", instructions=INSTRUCTIONS, log_level="WARNING")
 

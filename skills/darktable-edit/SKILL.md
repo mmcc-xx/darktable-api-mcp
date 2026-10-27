@@ -197,6 +197,30 @@ contrast. Use it for sky vs. foreground, backlit faces, deep shadows.
 - Headless, after changing a setting, check settings that darktable's
   window would have adjusted (exposure `mode`, AgX pivot with `auto_gamma`).
 
+## Keeping it cheap
+
+Every request re-reads the whole conversation, and every render stays in
+it, so the number of renders and calls drives the cost.
+
+- While adjusting a step, read `measure` numbers; render once the step is
+  done. The default preview size is enough for the whole photo; for detail
+  use `zoom` on the area, never a bigger size.
+- Put several settings of one module in one `set_module`.
+- Skip `get_module(full=True)` and the long guides when this skill already
+  names the settings; plain `get_module` gives the current values.
+- Two tries at one fix that don't work (a mask that spills, a fill that
+  smears, a lift that won't show): change the approach (a different mask,
+  a parametric limit, a different tool) or show the user and ask. Raising
+  the strength or retrying the same thing costs more and usually looks
+  worse (the +2 EV dodge that made a halo).
+- A cheaper subagent only for edits whose values are already decided
+  (paste an edit, apply a style or preset to a batch, set listed values).
+  Looks, dodging and burning, and object removal stay in this session:
+  fixing a weak result costs more than doing it here.
+- Suggest `/clear` when the user moves to another photo and `/compact`
+  before a new round on the same photo once there are about 10 renders
+  (server instructions: what to keep).
+
 ## Skipping a step
 
 Not every photo needs all five steps. When you leave one out (white
@@ -230,8 +254,8 @@ alone (see darktable-cleanup).
 
 - One tone mapper. Exposure before tone mapping. Denoise before sharpening.
   Grain and vignette after the tone mapper.
-- Small steps, look after each. A strong edit made of many gentle moves
-  beats one big slider.
+- Small steps, measured; look when a step is done. A strong edit made of
+  many gentle moves beats one big slider.
 - For a vignette, an exposure instance with an inverted ellipse mask gives
   more control than the vignette module.
 - Black and white: see the darktable-mono skill. Dust and retouching: see
