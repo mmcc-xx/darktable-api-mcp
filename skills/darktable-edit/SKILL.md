@@ -37,7 +37,10 @@ translation of it into tool calls and checks.
 4. **Check for real clipping** on anything with bright skies, lamps or
    specular highlights: `check_sensor_clipping`. Clipped on the sensor =
    only the highlights module can reconstruct it; merely bright in the
-   render = recoverable with exposure, AgX or tone equalizer.
+   render = recoverable with exposure, AgX or tone equalizer. When the
+   render clips more than you accept, `solve_highlights(max_clipped=0.1)`
+   sets the tone mapper's white point in one call (it reports sensor
+   clipping instead of changing anything).
 
 Always `get_module(op)` before the first `set_module(op, ...)` on a module:
 names, ranges and dropdown values come from there, not from memory.
@@ -61,6 +64,9 @@ equalizer deal with them.
   midtone subject lands around Lab L 50–60 in the render; faces a bit
   brighter, dark subjects (black dog, night) lower. Check `mode` is
   manual ("manual" in `get_module`), or exposure won't apply.
+- Or in one call: `solve_exposure(target_l=55, boxes=[<subject box>])` (or
+  `markers=[...]`) finds the exposure for the region's median L; a low-key
+  photo `target_l=35`, a bright scene 60-65.
 - Leave `black` (black level correction) alone.
 
 ### 2. Color calibration: white balance

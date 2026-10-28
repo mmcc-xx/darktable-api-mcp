@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import math
 import os
 import time
 from pathlib import Path
@@ -32,6 +33,9 @@ means library id 36. One photo is current at a time (the last open_photo).
 Scene-referred order: exposure (subject midtones), white balance in color
 calibration (channelmixerrgb), one tone mapper (agx; sigmoid/filmicrgb on
 older edits; never two), then toneequal and colorbalancergb.
+solve_exposure (a marker or box on the subject, target_l) and
+solve_highlights (max_clipped) set exposure and the tone mapper's white
+point in one call instead of render-and-look rounds.
 Film emulation: spektrafilm (darktable 5.8+), a spectral film and print
 simulation that is itself the tone mapper: switch agx/sigmoid/filmicrgb
 off when using it. Choose a stock with its presets (list_presets).
@@ -2624,6 +2628,318 @@ async def check_sensor_clipping(image_id: int | None = None) -> dict:
                         if clipped else
                         "no significant sensor saturation: bright areas in the render are recoverable with "
                         "the tone mapper, exposure or tone equalizer")}
+
+
+async def _region_l(points: list[list[float]] | None, boxes: list[dict] | None,
+                    size: int = 512) -> tuple[float | None, str]:
+    """The median L (display Lab) of a region, from one sample call: each box
+    as a 4x4 grid of cell means, the whole frame (no points, no boxes) as an
+    8x8 grid, points with radius 3. Also a description of the region."""
+    import statistics
+    points, boxes = list(points or []), list(boxes or [])
+    cells: list[dict] = []
+    if boxes:
+        for b in boxes:
+            l, t, r, bt = float(b["left"]), float(b["top"]), float(b["right"]), float(b["bottom"])
+            for i in range(4):
+                for j in range(4):
+                    cells.append({"left": l + (r - l) * i / 4, "right": l + (r - l) * (i + 1) / 4,
+                                  "top": t + (bt - t) * j / 4, "bottom": t + (bt - t) * (j + 1) / 4})
+    elif not points:
+        for i in range(8):
+            for j in range(8):
+                cells.append({"left": i / 8, "right": (i + 1) / 8, "top": j / 8, "bottom": (j + 1) / 8})
+    r = await _edit(None, "sample", width=size, height=size, radius=3, points=points, boxes=cells, bins=2)
+    vals = [p["lab"][0] for p in (r.get("points") or []) + (r.get("boxes") or [])
+            if p and p.get("lab")]
+    desc = ("whole frame" if not boxes and not points else
+            ", ".join(s for s in (f"{len(boxes)} box(es)" if boxes else "", f"{len(points)} point(s)" if points else "") if s))
+    return (statistics.median(vals) if vals else None), desc
+
+
+async def _solve_region(points, boxes, markers) -> tuple[list, list, str]:
+    points, boxes, names = list(points or []), list(boxes or []), list(markers or [])
+    for name in names:
+        m = await _marker(name)
+        if m["kind"] == "point":
+            points.append(m["points"][0])
+        else:
+            boxes.append(m["box"])
+    return points, boxes, ", ".join(names)
+
+
+async def _module_state(op: str) -> tuple[bool, dict]:
+    m = await _edit(None, "module_get", operation=op, instance=0)
+    return bool(m.get("enabled")), {f["name"]: f for f in m.get("fields", [])}
+
+
+def _y_of_l(l: float) -> float:
+    return ((l + 16) / 116) ** 3 if l > 8 else l / 903.3
+
+
+@mcp.tool(structured_output=False)
+async def solve_exposure(target_l: float = 50, points: list[list[float]] | None = None,
+                         boxes: list[dict] | None = None, markers: list[str] | None = None,
+                         tolerance: float = 1.0, preview: bool | dict = True) -> dict | list:
+    """Set the exposure module's exposure (EV) so a region's median Lab L
+    (display, 0-100) reaches target_l, in one call instead of render-and-look
+    rounds. It tries values (at most 8 renders of a small readout) and keeps
+    the best; the result is one history step (none if nothing changes), not
+    saved until save. Region: points [[x, y]], boxes [{left, top, right,
+    bottom}] or markers (names from list_markers), fractions of the photo;
+    none given measures the whole frame, which is a poor stand-in for a
+    subject. tolerance: accepted distance from target_l in L (0.25-5).
+    Example: solve_exposure(target_l=50, markers=["face"]). Skin and midtone
+    subjects ~50-60; a low-key photo: target_l=35; a bright scene: 60-65.
+    Check "converged" and the preview: the tone mapper after exposure still
+    shapes the look, and a clamped result says so in "note"."""
+    await _require("sample", "module_set")
+    if engine.image_id is None:
+        raise ToolError("no photo is open: call open_photo(image_id) first")
+    target = max(5.0, min(float(target_l), 95.0))
+    tol = max(0.25, min(float(tolerance), 5.0))
+    points, boxes, mnames = await _solve_region(points, boxes, markers)
+    enabled, fields = await _module_state("exposure")
+    f = fields.get("exposure")
+    if f is None:
+        raise ToolError("the exposure module has no 'exposure' setting here")
+    e0, fmin, fmax = float(f["value"]), float(f.get("min", -18)), float(f.get("max", 18))
+    lo_lim, hi_lim = max(fmin, e0 - 6), min(fmax, e0 + 6)
+    l0, desc = await _region_l(points, boxes)
+    if mnames:
+        desc += f" ({mnames})"
+    if l0 is None:
+        raise ToolError("nothing to measure in that region")
+    notes = []
+    if not enabled:
+        notes.append("exposure was off: switched on")
+    if not points and not boxes:
+        notes.append("measured on the whole frame; a marker or box on the subject is better")
+
+    def rnd(v: float) -> float:
+        return round(v, 2)
+
+    def finish(extra: dict) -> dict:
+        res = {"module": "exposure", "setting": "exposure", "target_l": target, **extra}
+        if notes:
+            res["note"] = "; ".join(notes)
+        return res
+
+    if abs(l0 - target) <= tol and enabled:
+        return await _and_look(finish({"from": rnd(e0), "to": rnd(e0), "change_ev": 0.0, "start_l": round(l0, 1),
+                                       "measured_l": round(l0, 1), "region": desc, "converged": True,
+                                       "trials": [], "changed": False}), preview, None)
+    known: list[tuple[float, float]] = [(e0, l0)]       # (ev, L), including the start
+    trials: list[tuple[float, float]] = []
+    history_end = None
+    started = False
+    try:
+        for _ in range(8):
+            below = [k for k in known if k[1] < target]
+            above = [k for k in known if k[1] > target]
+            lo = max(below, key=lambda k: k[0]) if below else None
+            hi = min(above, key=lambda k: k[0]) if above else None
+            if lo and hi and lo[0] > hi[0]:             # not monotonic after all
+                lo = hi = None
+            if not trials:
+                step = math.log2(_y_of_l(target) / _y_of_l(max(l0, 1.0)))
+                ev = e0 + max(-4.0, min(4.0, step))
+            else:
+                (ea, la), (eb, lb) = known[-2], known[-1]
+                sec = None
+                if abs(lb - la) > 0.05 and abs(eb - ea) > 1e-6:
+                    sec = eb + (target - lb) * (eb - ea) / (lb - la)
+                if lo and hi:
+                    ev = sec if sec is not None and lo[0] < sec < hi[0] else (lo[0] + hi[0]) / 2
+                elif sec is not None and abs(sec - eb) < 8:
+                    ev = sec
+                else:
+                    ev = eb + (1.0 if lb < target else -1.0)
+            ev = rnd(max(lo_lim, min(hi_lim, ev)))
+            if lo and hi and not lo[0] < ev < hi[0]:
+                ev = rnd((lo[0] + hi[0]) / 2)
+            if trials and abs(ev - trials[-1][0]) < 0.01:
+                break
+            r = await _edit(None, "module_set", operation="exposure", values={"exposure": ev}, instance=0)
+            started = True
+            history_end = r.get("history_end", history_end)
+            lv, _d = await _region_l(points, boxes)
+            if lv is None:
+                raise ToolError("nothing to measure in that region")
+            trials.append((ev, lv))
+            known.append((ev, lv))
+            if abs(lv - target) <= tol:
+                break
+        cands = list(trials) + ([(e0, l0)] if enabled else [])
+        best = min(cands, key=lambda k: abs(k[1] - target))
+        if trials[-1] != best:
+            r = await _edit(None, "module_set", operation="exposure", values={"exposure": best[0]}, instance=0)
+            history_end = r.get("history_end", history_end)
+    except Exception:
+        if started:
+            try:
+                await _edit(None, "module_set", operation="exposure", values={"exposure": e0}, instance=0)
+                if not enabled:
+                    await _edit(None, "module_enable", operation="exposure", enabled=False, instance=0)
+            except Exception:
+                pass
+        raise
+    ok = abs(best[1] - target) <= tol
+    if not ok:
+        at_clamp = abs(best[0] - lo_lim) < 0.01 or abs(best[0] - hi_lim) < 0.01
+        notes.append("not converged: " + ("clamped at the range of the exposure setting" if at_clamp
+                                          else "8 trials without reaching the tolerance"))
+    return await _and_look(finish({"from": rnd(e0), "to": rnd(best[0]), "change_ev": rnd(best[0] - e0),
+                                   "start_l": round(l0, 1), "measured_l": round(best[1], 1), "region": desc,
+                                   "converged": ok, "trials": [[a, round(b, 1)] for a, b in trials],
+                                   "history_end": history_end, "changed": True}), preview, None)
+
+
+@mcp.tool(structured_output=False)
+async def solve_highlights(max_clipped: float = 0.1, preview: bool | dict = True) -> dict | list:
+    """Set the tone mapper's white point so no more than max_clipped percent
+    of the render's pixels are clipped in the highlights (0.1 = 0.1 %), in
+    one call. Works on the tone mapper that is on: agx (range_white_relative_ev,
+    raised), filmic rgb (white_point_source, raised) or sigmoid
+    (display_white_target, lowered). It tries values (at most 8 renders of a
+    small readout) and keeps the smallest change that meets the target; one
+    history step, not saved until save. If the photo clipped on the sensor
+    (check_sensor_clipping runs first), it changes nothing and says so: a
+    tone mapper can't bring that back, only the highlights module (highlight
+    reconstruction) can. If the render still clips at the end of the range,
+    the clipping isn't the tone mapper's: modules after it (color balance
+    rgb's saturation or brilliance, local contrast) or exposure; it puts the
+    setting back (changed false; trials show what each value gave) and the
+    note says so. Not for spektrafilm."""
+    await _require("sample", "module_set")
+    if engine.image_id is None:
+        raise ToolError("no photo is open: call open_photo(image_id) first")
+    maxc = max(0.0, min(float(max_clipped), 20.0))
+    op = None
+    state: dict = {}
+    for cand in ("agx", "filmicrgb", "sigmoid"):
+        try:
+            en, flds = await _module_state(cand)
+        except (ToolError, EngineError):
+            continue
+        if en:
+            op, state = cand, flds
+            break
+    if op is None:
+        film = False
+        try:
+            film = (await _module_state("spektrafilm"))[0]
+        except (ToolError, EngineError):
+            pass
+        if film:
+            raise ToolError("solve_highlights doesn't handle spektrafilm (it is its own tone mapper): "
+                            "change its exposure or paper settings instead")
+        raise ToolError("no tone mapper is on (agx, sigmoid or filmic rgb): turn one on first; "
+                        "enable_module('agx', True)")
+    field = {"agx": "range_white_relative_ev", "filmicrgb": "white_point_source",
+             "sigmoid": "display_white_target"}[op]
+    f = state.get(field)
+    if f is None:
+        raise ToolError(f"{op} has no '{field}' setting here")
+    w0, fmin, fmax = float(f["value"]), float(f.get("min", 0.1)), float(f.get("max", 20))
+    up = op != "sigmoid"
+
+    async def clipped() -> float:
+        r = await _edit(None, "sample", width=1024, height=1024, radius=0, points=[], boxes=[], bins=2)
+        return 100.0 * float(r.get("clipped_highlights") or 0.0)
+
+    start = await clipped()
+    out: dict = {"module": op, "setting": field, "from": round(w0, 2), "start_clipped_pct": round(start, 3),
+                 "max_clipped": maxc}
+    if start <= maxc:
+        return await _and_look({**out, "to": round(w0, 2), "clipped_pct": round(start, 3), "converged": True,
+                                "trials": [], "changed": False}, preview, None)
+    sensor: dict = {"checked": False, "clipped": False, "worst_pct": None}
+    notes = []
+    try:
+        sc = await check_sensor_clipping()
+    except ToolError as exc:
+        notes.append(f"sensor not checked: {exc}")
+    else:
+        worst = max((v["clipped_pct"] for v in sc["channels"].values()), default=0.0)
+        sensor = {"checked": True, "clipped": bool(sc["sensor_clipped"]), "worst_pct": worst}
+        if sc["sensor_clipped"] and worst >= maxc:
+            return {**out, "to": round(w0, 2), "clipped_pct": round(start, 3), "converged": False, "trials": [],
+                    "changed": False, "sensor_clipped": True, "channels": sc["channels"], "sensor": sensor,
+                    "verdict": (f"clipped on the sensor ({worst:.2f}% of photosites): the tone mapper can't "
+                                "bring that back; only the highlights module (highlight reconstruction) "
+                                "can rebuild it")}
+        if sc["sensor_clipped"]:
+            notes.append(f"some sensor clipping ({worst:.3f}% of photosites), below the target")
+    # s: how far from w0, in the direction that clips less (EV for agx/filmic, a fraction for sigmoid)
+    smax = (fmax - w0) if up else (1 - max(50.0, fmin) / w0)
+    if smax < 0.005:
+        raise ToolError(f"{field} is already at the end of its range ({w0}): lower exposure instead")
+    first, tol_s = (1.0, 0.05) if up else (0.1, 0.005)
+
+    def value(s: float) -> float:
+        return round(w0 + s if up else w0 * (1 - s), 2)
+
+    trials: list[tuple[float, float, float]] = []       # (s, value, pct)
+    h_before = (await _edit(None, "history_list"))["history_end"]
+    history_end = None
+    started = False
+
+    async def trial(s: float) -> float:
+        nonlocal history_end, started
+        v = value(s)
+        r = await _edit(None, "module_set", operation=op, values={field: v}, instance=0)
+        started = True
+        history_end = r.get("history_end", history_end)
+        pct = await clipped()
+        trials.append((s, v, pct))
+        return pct
+
+    try:
+        over_s, under_s, step = 0.0, None, first
+        while len(trials) < 8:
+            s = min(step, smax)
+            if await trial(s) <= maxc:
+                under_s = s
+                break
+            over_s = s
+            if s >= smax:
+                break
+            step *= 2
+        if under_s is not None:
+            while len(trials) < 8 and under_s - over_s > tol_s:
+                s = (over_s + under_s) / 2
+                if await trial(s) <= maxc:
+                    under_s = s
+                else:
+                    over_s = s
+            final = next(t for t in trials if t[0] == under_s)
+        else:                                           # never met: put it back rather than flatten the photo
+            final = (0.0, round(w0, 2), start)
+        if trials[-1] != final:
+            r = await _edit(None, "module_set", operation=op, values={field: final[1]}, instance=0)
+            history_end = r.get("history_end", history_end)
+        if final[2] > maxc and history_end is not None and history_end > h_before:
+            history_end = (await _edit(None, "history_end", end=h_before)).get("history_end", h_before)
+    except Exception:
+        if started:
+            try:
+                await _edit(None, "module_set", operation=op, values={field: w0}, instance=0)
+            except Exception:
+                pass
+        raise
+    ok = final[2] <= maxc
+    if not ok:
+        least = min(trials, key=lambda t: t[2])
+        notes.append(f"left at {round(w0, 2)}: the render still clips {least[2]:.3f}% at {least[1]}, so the clipping "
+                     "doesn't come from the tone mapper: look at modules after it that brighten or saturate "
+                     "(color balance rgb, local contrast) and at exposure before it")
+    res = {**out, "to": final[1], "clipped_pct": round(final[2], 3), "converged": ok,
+           "trials": [[v, round(p, 3)] for _, v, p in trials], "history_end": history_end, "changed": ok,
+           "sensor": sensor}
+    if notes:
+        res["note"] = "; ".join(notes)
+    return await _and_look(res, preview, None)
 
 
 @mcp.tool()

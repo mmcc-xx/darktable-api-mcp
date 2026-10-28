@@ -101,7 +101,9 @@ For each suggestion:
 - **Why**: what you saw or measured (numbers).
 - **How**: the module and values, as the tool call that would do it
   (`set_module("exposure", {"exposure": +0.3})`, a mask from
-  darktable-local, a retouch from darktable-cleanup).
+  darktable-local, a retouch from darktable-cleanup). For exposure and
+  clipping give the solver call: `solve_exposure(target_l=..., boxes=[...])`,
+  `solve_highlights()`.
 - **Effect**: what will look different.
 
 Separate fixes (something is wrong) from taste (a different look the user
