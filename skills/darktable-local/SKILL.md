@@ -119,6 +119,8 @@ There's no mask overlay through the tools, so make it visible:
    the boundary (skyline, hair, the subject's outline).
 3. **Measure**: `measure_photo(boxes=[inside, outside])` with the
    exaggerated value: inside changes a lot, outside not at all.
+   After a masked edit, `change_map(mask={"operation": op, "instance": n})`
+   compares the change inside the mask with outside (dE, leak).
 4. Fix the shape (`list_masks`, `remove_mask`, add again with new numbers),
    then set the real value.
 

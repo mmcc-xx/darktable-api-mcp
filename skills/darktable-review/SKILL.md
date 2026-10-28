@@ -48,7 +48,8 @@ Base every point on something you saw or measured, and say which.
   clipping with sensor headroom is recoverable; sensor clipping isn't.
   Crushed shadows with lost detail.
 - White balance: neutral things (grey stone, white paper, clouds) near
-  a = b = 0; a cast that isn't the mood of the light.
+  a = b = 0; a cast that isn't the mood of the light. Measure it with
+  `analyze_cast`. "What did the edit change": `change_map`.
 - Noise for the ISO, at 100%; overdone denoise (waxy skin, smeared
   foliage).
 - Sharpness: focus on the subject (eyes for people); motion blur; soft

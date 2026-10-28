@@ -83,6 +83,9 @@ handles highlights and mixed light better.
   illuminant) in a few hundred K steps and re-measure. Raising
   `temperature` warms the result (it tells darktable the light was bluer);
   verify the direction by measuring rather than trusting this.
+- Measure before correcting by eye: `analyze_cast` reads the a*/b* cast
+  per tonal band (give `boxes` on a gray card or white wall when there is
+  one); keep a deliberate warm or cool look.
 - Don't neutralise light that is part of the mood (sunset, candlelight,
   blue hour) unless the user asks; reduce the cast instead of removing it.
 - Mixed light: one color calibration instance per light source, each with

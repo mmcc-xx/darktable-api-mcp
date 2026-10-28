@@ -169,6 +169,8 @@ works after the grey conversion in the pipe:
 - Split tone: warm highlights, cool shadows (`shadows_H` around 200–230°),
   low chroma on both.
 - Check `measure_photo`: the tint should be visible but faint.
+  `analyze_cast` reads the toning per band (shadows vs highlights differ
+  for a split tone); a neutral B&W should read neutral.
 
 ## Creative variant (method 2)
 

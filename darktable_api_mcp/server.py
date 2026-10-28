@@ -1370,6 +1370,328 @@ async def zone_map(points: list[list[float]] | None = None, highlight: list[int]
     return [json.dumps(summary), McpImage(data=png.tobytes(), format="png")]
 
 
+def _srgb8_to_lab(im):
+    """An 8-bit BGR image as CIE Lab (D65): float32 arrays L, a, b."""
+    import numpy as np
+    f = im.astype(np.float32) / 255.0
+    lin = np.where(f <= 0.04045, f / 12.92, ((f + 0.055) / 1.055) ** 2.4)
+    bl, gr, rd = lin[..., 0], lin[..., 1], lin[..., 2]
+    x = (0.4124564 * rd + 0.3575761 * gr + 0.1804375 * bl) / 0.95047
+    y = 0.2126729 * rd + 0.7151522 * gr + 0.0721750 * bl
+    z = (0.0193339 * rd + 0.1191920 * gr + 0.9503041 * bl) / 1.08883
+
+    def fn(t):
+        return np.where(t > 216 / 24389, np.cbrt(t), (t * 24389 / 27 + 16) / 116)
+
+    fx, fy, fz = fn(x), fn(y), fn(z)
+    return (116 * fy - 16).astype(np.float32), (500 * (fx - fy)).astype(np.float32), \
+        (200 * (fy - fz)).astype(np.float32)
+
+
+def _cast_word(a: float, b: float, mono: bool) -> str:
+    """analyze_cast's verdict for a median (a*, b*)."""
+    if abs(a) < 2 and abs(b) < 2:
+        return "neutral"
+    parts = []
+    for v, axis, pos, neg in sorted([(b, "b*", "warm", "cool"), (a, "a*", "magenta", "green")],
+                                    key=lambda t: -abs(t[0])):
+        if abs(v) < 2:
+            continue
+        word = pos if v > 0 else neg
+        parts.append(f"{v:+.1f} {axis} " + ("slightly " if abs(v) < 5 else "") + word + (" tone" if mono else ""))
+    return ", ".join(parts)
+
+
+async def _box_list(boxes: list[dict] | None, markers: list[str] | None) -> list[dict]:
+    """Boxes and markers as a list of {left, top, right, bottom} (a point marker a box of +-0.02)."""
+    out = [{k: float(b[k]) for k in ("left", "top", "right", "bottom")} for b in boxes or []]
+    for name in markers or []:
+        m = await _marker(name)
+        if m["kind"] == "point":
+            x, y = m["points"][0]
+            out.append({"left": x - 0.02, "top": y - 0.02, "right": x + 0.02, "bottom": y + 0.02})
+        else:
+            out.append(dict(m["box"]))
+    return out
+
+
+def _box_mask(np, boxes: list[dict], h: int, w: int):
+    m = np.zeros((h, w), bool)
+    for b in boxes:
+        x0, x1 = sorted((int(round(b["left"] * w)), int(round(b["right"] * w))))
+        y0, y1 = sorted((int(round(b["top"] * h)), int(round(b["bottom"] * h))))
+        m[max(y0, 0):min(max(y1, y0 + 1), h), max(x0, 0):min(max(x1, x0 + 1), w)] = True
+    return m
+
+
+@mcp.tool(structured_output=False)
+async def analyze_cast(boxes: list[dict] | None = None, markers: list[str] | None = None,
+                       history_step: int | None = None, mono: bool | None = None,
+                       size: int = 800) -> list:
+    """Colour cast of the open photo's render: the median a*/b* (Lab) of
+    its likely-neutral pixels (low chroma, not clipped) in shadows,
+    midtones and highlights, with a verdict (b* > 0 warm, < 0 cool, a* > 0
+    magenta, < 0 green). boxes [{left, top, right, bottom}] / markers
+    (names from list_markers) mark a known neutral (a gray card, a white
+    wall) and are measured as it is. mono: default automatic; in a black
+    and white photo the a*/b* per band is the toning. history_step as
+    render_preview. Use it when white balance looks off or before calling
+    a cast; a deliberate warm or cool look is not a fault."""
+    try:
+        import cv2
+        import numpy as np
+    except ImportError as exc:
+        raise ToolError(f"analyze_cast needs numpy and opencv: pip install 'darktable-api-mcp[dust]' ({exc})")
+    image_id = engine.image_id
+    if image_id is None:
+        raise ToolError("no photo is open: call open_photo(image_id) first")
+    size = max(256, min(size, 1600))
+    region = None
+    if history_step is not None:
+        await _require("render.history_end")
+        region = {"history_end": max(0, history_step)}
+    step = history_step if history_step is not None else (await _edit(image_id, "history_list"))["history_end"]
+    box_list = await _box_list(boxes, markers)
+    try:
+        r = await engine.render(image_id, size, size, False, region)
+    except EngineError as exc:
+        raise _err(exc)
+    if r is None:
+        raise ToolError("overtaken by a newer render request: try again")
+    im = cv2.imdecode(np.frombuffer(r[0], np.uint8), cv2.IMREAD_COLOR)
+    h, w = im.shape[:2]
+    total = h * w
+    clipped = (im >= 250).any(axis=2) | (im <= 5).all(axis=2)
+    lum, la, lb = _srgb8_to_lab(cv2.blur(im, (5, 5)))
+    chroma = np.hypot(la, lb)
+    usable = ~clipped & (lum >= 5) & (lum <= 97)
+    bands = {"shadows": usable & (lum < 30), "midtones": usable & (lum >= 30) & (lum <= 70),
+             "highlights": usable & (lum > 70)}
+    if mono is None:
+        # black and white, toned or not: a*/b* follow L (one tone per brightness), so within
+        # steps of 10 L the pixels sit close to their step's median
+        dist = []
+        for lo in range(0, 100, 10):
+            bm = usable & (lum >= lo) & (lum < lo + 10)
+            if bm.sum() >= 50:
+                dist.append(np.hypot(la[bm] - np.median(la[bm]), lb[bm] - np.median(lb[bm])))
+        mono = bool(dist and np.percentile(np.concatenate(dist), 95) < 4
+                    and np.percentile(chroma[usable], 95) < 30)
+    in_boxes = _box_mask(np, box_list, h, w) if box_list else None
+    out_bands: dict[str, Any] = {}
+    parts = []
+    for name, bm in bands.items():
+        share = round(float(bm.sum()) / total, 3)
+        if in_boxes is not None:
+            pix = bm & in_boxes
+            ok, neutral_px = pix.sum() >= 50, float(pix.sum()) / total
+        elif mono:
+            pix = bm
+            ok, neutral_px = pix.sum() >= 50, float(pix.sum()) / total
+        else:
+            cand = bm & (chroma <= 25)
+            n = int(cand.sum())
+            ok = n >= 200
+            pix, neutral_px = cand, 0.0
+            if ok:
+                k = max(int(n * 0.1), 200)
+                cut = np.partition(chroma[cand], k - 1)[k - 1]
+                pix = cand & (chroma <= cut)
+                neutral_px = float(pix.sum()) / total
+        if not ok:
+            out_bands[name] = None
+            parts.append(f"{name}: too few neutral pixels")
+            continue
+        a, b = float(np.median(la[pix])), float(np.median(lb[pix]))
+        word = _cast_word(a, b, mono)
+        out_bands[name] = {"share": share, "neutral_px": round(neutral_px, 4), "a": round(a, 1),
+                           "b": round(b, 1), "verdict": word}
+        parts.append(f"{name} {word}")
+    summary: dict[str, Any] = {"verdict": "; ".join(parts), "mode": "mono" if mono else "color", "step": step,
+                               "bands": out_bands}
+    if box_list:
+        bl = []
+        for bx in box_list:
+            pix = usable & _box_mask(np, [bx], h, w)
+            if pix.sum() < 50:
+                bl.append({"box": bx, "L": None, "a": None, "b": None, "verdict": "too few usable pixels"})
+                continue
+            a, b = float(np.median(la[pix])), float(np.median(lb[pix]))
+            bl.append({"box": {k: round(v, 4) for k, v in bx.items()}, "L": round(float(np.median(lum[pix])), 1),
+                       "a": round(a, 1), "b": round(b, 1), "verdict": _cast_word(a, b, mono)})
+        summary["boxes"] = bl
+    summary["clipped"] = round(float(clipped.sum()) / total, 3)
+    summary["note"] = ("black and white: the a*/b* per band is the toning (split toning when shadows and "
+                       "highlights differ)" if mono else
+                       "a measurement, not a target: keep a deliberate warm or cool look; fix with color "
+                       "calibration (white balance) only a cast that wasn't meant")
+    return [json.dumps(summary)]
+
+
+def _where(col: int, row: int, cols: int, rows: int) -> str:
+    x, y = (col + 0.5) / cols, (row + 0.5) / rows
+    h = "left" if x < 1 / 3 else "right" if x > 2 / 3 else "center"
+    v = "top" if y < 1 / 3 else "bottom" if y > 2 / 3 else "middle"
+    return "center" if (h, v) == ("center", "middle") else f"{v}-{h}"
+
+
+@mcp.tool(structured_output=False)
+async def change_map(before_step: int | None = None, after_step: int | None = None,
+                     cols: int = 6, rows: int = 4, threshold: float = 2.0,
+                     boxes: list[dict] | None = None, markers: list[str] | None = None,
+                     mask: dict | None = None, heatmap: bool = False, size: int = 800) -> list:
+    """What changed between two history steps, in numbers: per grid cell the
+    mean colour difference (CIE76 dE, 1 is just visible, 2 clearly) and
+    brightness change in EV (on the display render, after the tone mapper:
+    highlights are compressed), the share changed over threshold and where.
+    before_step default: before your first edit (or mark_before); after_step
+    default: the current edit. boxes / markers / mask ({"operation":
+    "exposure", "instance": 1}, a module instance's mask) compare the change
+    inside the intended area with outside: a local edit leaking shows as
+    outside dE or leak. heatmap: also an image of dE per cell. Use after a
+    local edit or when asked what changed; compare_before_after's renders
+    stay for judging the look."""
+    try:
+        import cv2
+        import numpy as np
+    except ImportError as exc:
+        raise ToolError(f"change_map needs numpy and opencv: pip install 'darktable-api-mcp[dust]' ({exc})")
+    image_id = engine.image_id
+    if image_id is None:
+        raise ToolError("no photo is open: call open_photo(image_id) first")
+    await _require("render.history_end")
+    hist = await _edit(image_id, "history_list")
+    n = len(hist["items"])
+    before = before_step if before_step is not None else _before.get(image_id, 0)
+    after = after_step if after_step is not None else hist["history_end"]
+    for nm, s in (("before_step", before), ("after_step", after)):
+        if not 0 <= s <= n:
+            raise ToolError(f"{nm} must be 0..{n}")
+    if before == after:
+        raise ToolError(f"before and after are the same step ({after}): nothing to compare; "
+                        "give before_step (0 = the original)")
+    cols, rows = max(1, min(cols, 12)), max(1, min(rows, 12))
+    threshold = max(0.5, min(threshold, 20.0))
+    size = max(128, min(size, 1600))
+    box_list = await _box_list(boxes, markers)
+    if mask is not None:
+        await _require("render.show_mask")
+        if not mask.get("operation"):
+            raise ToolError('mask is {"operation": "exposure", "instance": 1}')
+
+    async def render(region):
+        try:
+            r = await engine.render(image_id, size, size, False, region)
+        except EngineError as exc:
+            raise _err(exc)
+        if r is None:
+            raise ToolError("overtaken by a newer render request: try again")
+        return r
+
+    rb = await render({"history_end": before})
+    ra = await render({"history_end": after})
+    imb = cv2.imdecode(np.frombuffer(rb[0], np.uint8), cv2.IMREAD_COLOR)
+    ima = cv2.imdecode(np.frombuffer(ra[0], np.uint8), cv2.IMREAD_COLOR)
+    if imb.shape != ima.shape:
+        raise ToolError(f"the steps have different framing ({imb.shape[1]}x{imb.shape[0]} vs "
+                        f"{ima.shape[1]}x{ima.shape[0]}): change_map compares steps with the same crop; "
+                        "use compare_before_after")
+    h, w = ima.shape[:2]
+    lb_, ab_, bb_ = _srgb8_to_lab(imb)
+    la_, aa_, ba_ = _srgb8_to_lab(ima)
+    de = np.sqrt((la_ - lb_) ** 2 + (aa_ - ab_) ** 2 + (ba_ - bb_) ** 2)
+
+    def lin_y(lv):
+        return np.where(lv > 8, ((lv + 16) / 116) ** 3, lv / 903.3)
+
+    yb, ya = lin_y(lb_), lin_y(la_)
+    over = de > threshold
+
+    def ev_of(ma, mb):
+        return float(np.log2(max(ma, 1e-4) / max(mb, 1e-4)))
+
+    xs = np.linspace(0, w, cols + 1).astype(int)
+    ys = np.linspace(0, h, rows + 1).astype(int)
+    g_de, g_ev, g_ch, cells = [], [], [], []
+    for r_ in range(rows):
+        rde, rev, rch = [], [], []
+        for c_ in range(cols):
+            sl = (slice(ys[r_], ys[r_ + 1]), slice(xs[c_], xs[c_ + 1]))
+            m = float(de[sl].mean())
+            e = ev_of(float(ya[sl].mean()), float(yb[sl].mean()))
+            ch = float(over[sl].mean())
+            rde.append(round(m, 1))
+            rev.append(round(e, 2))
+            rch.append(round(ch, 2))
+            cells.append((m, e, c_, r_))
+        g_de.append(rde)
+        g_ev.append(rev)
+        g_ch.append(rch)
+    mean_de, changed = float(de.mean()), float(over.mean())
+    ev = ev_of(float(ya.mean()), float(yb.mean()))
+    largest = [{"cell": [c_, r_], "where": _where(c_, r_, cols, rows), "dE": round(m, 1), "ev": round(e, 2)}
+               for m, e, c_, r_ in sorted(cells, key=lambda t: -t[0])[:3] if m >= 0.5]
+    if changed < 0.0005:
+        verdict = f"no visible change (mean dE {mean_de:.1f})"
+    else:
+        wh = list(dict.fromkeys(x["where"] for x in largest))[:2]
+        verdict = (f"changed {changed * 100:.0f}% of the photo (dE > {threshold:g})"
+                   + (f", mostly {' and '.join(wh)}" if wh else "") + f"; mean {ev:+.2f} EV")
+    summary: dict[str, Any] = {"verdict": verdict, "before": before, "after": after, "threshold": threshold,
+                               "dE": round(mean_de, 1), "changed": round(changed, 3), "ev": round(ev, 2),
+                               "largest": largest,
+                               "grid": {"cols": cols, "rows": rows, "dE": g_de, "ev": g_ev, "changed": g_ch}}
+    wgt = None
+    if mask is not None:
+        rm = await render({"history_end": after, "show_mask": {"operation": mask["operation"],
+                                                               "instance": int(mask.get("instance", 0))}})
+        if rm[1].get("mask_shown") is False:
+            raise ToolError(f"{mask['operation']} instance {mask.get('instance', 0)}'s mask is the same "
+                            "everywhere (a drawn mask with no shapes, or a range that takes everything)")
+        imm = cv2.imdecode(np.frombuffer(rm[0], np.uint8), cv2.IMREAD_COLOR)
+        if imm.shape[:2] != (h, w):
+            imm = cv2.resize(imm, (w, h), interpolation=cv2.INTER_AREA)
+        f = imm.astype(np.float32) / 255.0
+        wgt = np.clip((f[..., 2] + f[..., 1]) / 2 - f[..., 0], 0, 1)
+        p = float(np.percentile(wgt, 99.5))
+        if p > 1e-3:
+            wgt = np.clip(wgt / p, 0, 1)
+    elif box_list:
+        wgt = _box_mask(np, box_list, h, w).astype(np.float32)
+    if wgt is not None:
+        def wstats(wt):
+            s = float(wt.sum())
+            if s < 1e-6:
+                return {"dE": None, "changed": None, "ev": None}
+            return {"dE": round(float((wt * de).sum() / s), 1), "changed": round(float((wt * over).sum() / s), 2),
+                    "ev": round(ev_of(float((wt * ya).sum() / s), float((wt * yb).sum() / s)), 2)}
+
+        low = wgt < 0.1
+        leak = float((low & over).sum() / low.sum()) if low.any() else 0.0
+        summary["region"] = {"inside": wstats(wgt), "outside": wstats(1 - wgt), "leak": round(leak, 3)}
+        i_de, o_de = summary["region"]["inside"]["dE"], summary["region"]["outside"]["dE"]
+        if i_de is not None and o_de is not None:
+            summary["verdict"] += f"; inside dE {i_de:.1f}, outside {o_de:.1f} (leak {leak * 100:.1f}%)"
+    out: list = [json.dumps(summary)]
+    if heatmap:
+        gray = (cv2.cvtColor(ima, cv2.COLOR_BGR2GRAY).astype(np.float32) * 0.5).astype(np.uint8)
+        gray = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
+        col = cv2.applyColorMap((np.clip(de / (2 * threshold * 2.5), 0, 1) * 255).astype(np.uint8),
+                                cv2.COLORMAP_INFERNO)
+        hm = cv2.addWeighted(gray, 0.4, col, 0.6, 0)
+        for x in xs[1:-1]:
+            cv2.line(hm, (int(x), 0), (int(x), h - 1), (255, 255, 255), 1)
+        for y in ys[1:-1]:
+            cv2.line(hm, (0, int(y)), (w - 1, int(y)), (255, 255, 255), 1)
+        for r_ in range(rows):
+            for c_ in range(cols):
+                cv2.putText(hm, f"{g_de[r_][c_]:.1f}", (int(xs[c_]) + 4, int(ys[r_]) + 14),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1, cv2.LINE_AA)
+        ok, png = cv2.imencode(".png", hm)
+        out.append(Image(data=png.tobytes(), format="png"))
+    return out
+
+
 # ── blending and masks ───────────────────────────────────────────────────────
 
 @mcp.tool()
