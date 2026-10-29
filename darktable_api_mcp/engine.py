@@ -357,10 +357,10 @@ class Engine:
 
     # ── the library lock ────────────────────────────────────────────────────
 
-    async def library(self, method: str) -> dict:
+    async def library(self, method: str, **params) -> dict:
         """library_status / library_release / library_acquire."""
         async with self._lock:
-            return await self._call(method)
+            return await self._call(method, **params)
 
     async def takeover(self) -> dict:
         """Quit the darktable GUI holding the library the normal way (as its

@@ -3435,12 +3435,20 @@ async def library_status() -> dict:
 
 
 @mcp.tool()
-async def release_library() -> dict:
+async def release_library(auto_acquire: bool = True) -> dict:
     """Close the library so darktable's GUI can open it. Unsaved changes of
-    the open photo are kept and restored by acquire_library if the photo
-    wasn't changed in the GUI meanwhile."""
+    the open photo are kept and restored on taking it back if the photo
+    wasn't changed in the GUI meanwhile.
+
+    auto_acquire (default True): once darktable's GUI has opened the library
+    and quit, the engine takes it back by itself within a few seconds; until
+    the GUI opens it, it stays released. False: it stays released until
+    acquire_library."""
+    if not auto_acquire:
+        await _require("library_release.auto_acquire")
     try:
-        return await engine.library("library_release")
+        return await (engine.library("library_release") if auto_acquire
+                      else engine.library("library_release", auto_acquire=False))
     except EngineError as exc:
         raise _err(exc)
 
@@ -3448,7 +3456,9 @@ async def release_library() -> dict:
 @mcp.tool()
 async def acquire_library() -> dict:
     """Take the library back after release_library (refused while darktable's
-    GUI still has it open)."""
+    GUI still has it open). Usually not needed: after release_library the
+    engine takes it back by itself once the GUI quits (library_status shows
+    state "owned" again)."""
     try:
         return await engine.library("library_acquire")
     except EngineError as exc:
