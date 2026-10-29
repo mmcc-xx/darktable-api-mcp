@@ -24,7 +24,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        branch: [darktable-api-5.6, darktable-api]
+        branch: [darktable-api]    # darktable-api-5.6 frozen 2026-10-29
     steps:
       # what a desktop Ubuntu has before the README starts (and curl for the test)
       - run: apt-get update && apt-get install -y sudo git python3 ca-certificates curl
@@ -48,7 +48,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        branch: [darktable-api-5.6, darktable-api]
+        branch: [darktable-api]    # darktable-api-5.6 frozen 2026-10-29
     steps:
       - uses: actions/checkout@v4
       - env:

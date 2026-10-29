@@ -11,7 +11,7 @@ variables, and the web app runs in the background and is fetched. A library
 with one raw (darktable's test image) stands in for the user's
 ~/.config/darktable. darktable's window (step 7) is not run.
 
-    python3 tests/readme_quickstart.py --platform macos --branch darktable-api-5.6 \\
+    python3 tests/readme_quickstart.py --platform macos --branch darktable-api \\
         --home /tmp/qs-home [--mcp-src .] [--port 8020] [--print]
 
 --mcp-src clones the MCP server from this checkout instead of GitHub (to test
@@ -203,7 +203,7 @@ def main() -> int:
         return 0
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[1])
     ap.add_argument("--platform", choices=PLATFORMS, required=True)
-    ap.add_argument("--branch", required=True, help="the fork's branch, e.g. darktable-api-5.6")
+    ap.add_argument("--branch", required=True, help="the fork's branch, e.g. darktable-api")
     ap.add_argument("--home", required=True, help="a fresh folder to use as the home folder")
     ap.add_argument("--mcp-src", help="clone the MCP server from this checkout, not GitHub")
     ap.add_argument("--port", type=int, default=8020, help="the web app's port")

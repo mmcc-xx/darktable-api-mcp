@@ -54,24 +54,20 @@ macOS 27 and 26 (the latter on GitHub's `macos-latest` runner).
 
 ### Pick a branch
 
-Pick the branch of the fork matching the darktable you edit your library
-with (a newer darktable writes module versions an older one can't open):
+Use `darktable-api`, the fork's default branch: darktable's development
+version with the API, merged with darktable master weekly once the tests
+pass. Its edits use module versions darktable 5.6 can't open, so edit the
+library only with the `darktable` from the same build (and work on a copy
+first).
 
-| Your darktable | Branch | What it is |
-|---|---|---|
-| the latest release, 5.6.x (5.6.2 on) | `darktable-api-5.6` | darktable's 5.6 release with the API; darktable's point releases are merged in as they come out. Most people want this one |
-| built from master | `darktable-api` (the fork's default branch) | darktable's development version with the API; darktable master is merged in weekly once the tests pass. Its edits use module versions darktable 5.6 can't open. Has the newest tools first (`ai_fill`, the AI fill in `heal_dust_spots`) |
-
-When darktable releases a new version (5.8, ...), a `darktable-api-5.8`
-branch starts from it and the previous release branch is frozen (tagged
-`api-dt<version>-final`, no more changes): pick the newest
-`darktable-api-<version>`.
+| Branch | What it is |
+|---|---|
+| `darktable-api` (default) | darktable master with the API; every tool in this server |
+| `darktable-api-5.6` | **frozen** (tag `api-dt5.6.2-final`, 2026-10-29): darktable 5.6.2 with the API as of 2026-10-15, no fixes or new methods since. Its edits open in stock darktable 5.6, but many newer tools report that the engine doesn't support them |
 
 Set it in the shell you run the steps below in:
 
-    BRANCH=darktable-api-5.6     # latest release (for master: BRANCH=darktable-api)
-
-Everything else is the same for both branches.
+    BRANCH=darktable-api
 
 ### Steps
 
@@ -273,9 +269,9 @@ starts in about 3 s on the first call.
    and with AI for the AI mask and AI denoise tools:
 
    Which branch: see [Pick a branch](#pick-a-branch)
-   (`darktable-api-5.6` for the latest release, `darktable-api` for master).
+   (`darktable-api`; `darktable-api-5.6` is frozen).
 
-       git clone -b darktable-api-5.6 --recurse-submodules https://github.com/mmcc-xx/darktable.git    # or -b darktable-api
+       git clone -b darktable-api --recurse-submodules https://github.com/mmcc-xx/darktable.git
        cd darktable
        cmake -B build -G Ninja -DUSE_API=ON -DUSE_AI=ON
        cmake --build build
