@@ -31,20 +31,30 @@ after it, and parametric masks depend on what comes before them.
    balance). Note the instance it returns. Rename it for the user:
    `rename_module_instance(op, instance, "sky")`.
 2. **The mask** (below) on that instance.
-3. **The change** on that instance: `set_module(op, values, instance=n)`.
-   Start strong enough to see where it acts, check, then dial it to the
-   final value.
+3. **The change** on that instance: `set_module(op, values, instance=n)`,
+   at the intended value: check where it acts with `show_mask` (below),
+   not with an extreme value the user may be watching live.
 4. **Check the mask** (below), then **soften the edges**.
 5. One local change per instance. Several areas with the same change can
    share one instance (shapes combine with `union`).
+
+Call `add_mask` on its own and read the result before `set_blending` or
+`set_module` on that instance. If it fails, the instance has no drawn
+shape, and an exposure change sent in the same batch hits the whole
+photo.
+
+**Two tries, then change the mask type.** If two attempts at one mask
+(shape or range) still leave a visible edge, a gap or spill, don't keep
+moving points and thresholds: switch type (path → gradient, brightness →
+hue, drawn → AI) or show the user and ask.
 
 ## Choosing the mask
 
 | Area | Mask | How |
 |---|---|---|
-| Sky fading into land, no hard horizon | gradient | `add_mask(op, "gradient", x, y, rotation, compression)` |
+| Sky fading into land, no hard horizon (haze, dust, fog, distant treeline) | gradient | `add_mask(op, "gradient", x, y, rotation, compression)`; a second wider gradient for a bright haze band, never a hand-drawn path along it |
 | Sky above a straight horizon, or above water | path + blue hue | a path around the sky down to the horizon (below), then `masks: "drawn & parametric"` with a sky hue range (below) |
-| Sky above an irregular skyline (trees, buildings) | path or gradient + hue or brightness | the drawn part for the sky's area, the parametric part to leave out what rises into it |
+| Sky above an irregular skyline (trees, buildings) | gradient (or path) + hue or brightness | the drawn part for the sky's area, the parametric part to leave out what rises into it; a grey, overcast sky has no hue to select, so use brightness `g` with a wide ramp |
 | A person, an animal, a car, a building | AI object mask | `add_ai_mask(op, include=[[x, y]])`, add `exclude` points to separate a neighbour |
 | Part of a landscape (a mountain, a hill, a field) | path | the AI mask works on distinct objects; on parts of a landscape it spills into neighbours or leaves holes. Draw a path instead |
 | A face, a spot of light, a round area | ellipse or circle | `add_mask(op, "ellipse", x, y, radius, radius_y, rotation, feather)` |
@@ -55,7 +65,11 @@ after it, and parametric masks depend on what comes before them.
 | Edges and corners (vignette) | ellipse, inverted | `add_mask(op, "ellipse", 0.5, 0.5, radius, radius_y, feather=0.3, inverted=True)` |
 
 Positions are fractions of the photo as `render_preview` shows it; radius
-and feather are fractions of the shorter side. Pick them from a
+and feather are fractions of the shorter side. A shape meant to reach the
+frame edge must reach it: points inside the edge (0.005, 0.995) leave an
+unmasked strip that shows as a bright or dark bar (BUGS #154: path points
+at exactly 0 or 1 are refused on some photos; prefer a gradient there).
+Check both frame edges at `zoom=1` after any mask that touches them. Pick them from a
 `render_preview` (with `measure_photo` to confirm where something is).
 
 **Gradient**: x, y is the **middle of the fade**, not where it ends: the
@@ -109,16 +123,16 @@ keeps only where both apply.
 
 ## Checking the mask
 
-There's no mask overlay through the tools, so make it visible:
-
-1. **Exaggerate**: set the instance to an obvious value (exposure +3 EV,
-   or saturation −1 for black and white where the mask is) and
-   `render_preview`. The changed area is the mask. Look for spill onto the
-   subject, missed corners, halos along edges.
+1. **Show it**: `render_preview(show_mask=op, show_mask_instance=n)`
+   draws the mask in yellow over a grey image, as the darkroom does. One
+   render settles a shape, a range or a feather. Look for spill onto the
+   subject, missed corners and frame edges, halos along edges. Don't test
+   with an extreme value (−3 EV): the engine is shared, so the user sees
+   that render live.
 2. **Zoom on the edges**: `render_preview(zoom=1, center_x, center_y)` on
    the boundary (skyline, hair, the subject's outline).
-3. **Measure**: `measure_photo(boxes=[inside, outside])` with the
-   exaggerated value: inside changes a lot, outside not at all.
+3. **Measure**: `measure_photo(boxes=[inside, outside])`: inside
+   changes, outside not at all.
    After a masked edit, `change_map(mask={"operation": op, "instance": n})`
    compares the change inside the mask with outside (dE, leak).
 4. Fix the shape (`list_masks`, `remove_mask`, add again with new numbers),
@@ -146,9 +160,16 @@ Hard mask edges are the most common local-edit artifact.
 - **Darken a bright sky**: exposure instance; a path over the sky to the
   horizon (or a gradient if sky fades into land), with a blue hue range so
   trees and buildings rising into it stay out; −0.5 to −1.5 EV; guided
-  feathering radius 2–5 if tree tops speckle. Check the skyline at 100%.
-  Measure the water, trees and ground before and after: they shouldn't
-  change.
+  feathering radius 2–5 if tree tops speckle. Check the skyline and both
+  frame edges at 100%. Measure the water, trees and ground before and
+  after: they shouldn't change. Keep the sky's order: lighter toward the
+  horizon than at the top, and not darker than the land below it, or it
+  reads as a mask.
+- **Dramatic sky**: darkening alone gives a flat grey lid. The drama is
+  cloud structure: local contrast or the tone equalizer on a sky-masked
+  instance (raster mask from the burn), after the burn. Don't brighten the
+  whole photo and then burn the sky back down; set global exposure and the
+  tone mapper for the land, and work the sky locally.
 - **Brighten a face or subject** (dodge): exposure instance, AI object mask
   or a feathered ellipse, +0.3 to +0.8 EV.
 - **Darken distractions** (burn): exposure instance, brush or ellipse,
@@ -169,5 +190,6 @@ Hard mask edges are the most common local-edit artifact.
 Say which area each local change covers and how you made the mask, the
 value, and what you checked ("sky −0.8 EV through a gradient on the
 horizon, limited to the bright parts so the trees stay; checked the
-skyline at 100%"). Each mask and change is a history step the user can
+skyline at 100%"). Name any visible edge, band or bar you saw in your
+checks as an artifact; don't describe it as part of the scene. Each mask and change is a history step the user can
 undo.
