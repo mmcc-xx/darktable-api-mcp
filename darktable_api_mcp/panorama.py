@@ -58,10 +58,11 @@ UNWANTED = {
     "borders": "a border frames each photo; add it to the panorama instead",
     "sharpen": "sharpening each frame shows at the seams; sharpen the panorama instead",
     "liquify": "liquify moves pixels in one frame, so it won't match its neighbor",
-    "overlay": "a composite (ai_fill) patch belongs to its own frame's content and position",
+    "overlay": "fine if it is dust or object removal (ai_fill, heal_dust_spots); other composites are better done on the panorama",
     "retouch": "fine if it is dust healing; other retouching is better done on the panorama",
 }
-KEEP_BY_DEFAULT = {"retouch"}
+# fixes to the frame's own pixels: they line up like the content they cover
+KEEP_BY_DEFAULT = {"retouch", "overlay"}
 # of those, the ones that make the look: carried over to the panorama
 LOOK = ("agx", "sigmoid", "filmicrgb", "filmic", "spektrafilm", "toneequal", "bilat", "hazeremoval", "diffuse",
         "sharpen")
