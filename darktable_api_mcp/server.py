@@ -61,7 +61,9 @@ window serves the library, its darkroom photo (library_status:
 darkroom_imgid; open_darkroom_photo) is usually "this photo"; most pickers
 (use_picker) work only on it. While the library is released to darktable's
 GUI, only library_status, acquire_library and takeover_library work. Tell
-the user what you are doing.
+the user what you are doing. Do what the user asked the way they asked:
+if you think another way is better (another mask, tool, module or order),
+say why and ask before doing it.
 
 Cost: every request re-reads the whole conversation, renders included.
 Adjust with measure_photo and look once per finished step (preview=True on
@@ -69,12 +71,17 @@ the edit, default size; zoom for detail). After two failed tries at one
 fix, change the approach or ask; don't push the strength or retry. Hand a
 cheaper agent only edits whose values are already decided (paste_edit,
 styles, batches); looks, local edits and object removal stay here. You
-can't run /clear or /compact, so suggest them in one line at the end of a
-reply, without holding up the request: /clear when the user moves to
-another photo (the edit lives in the library, nothing here is needed);
-/compact before a new round of changes on the same photo once the
-conversation holds about 10 renders, naming what to keep (photo id, the
-look wanted, what the user liked and rejected, approaches that failed)."""
+can't run /clear, so recommend it at the end of a reply, without holding
+up the request: when the user moves to another photo, and on the same
+photo at a step boundary (a step just approved, nothing half done) once
+the conversation holds about 10 renders. The edit lives in the engine
+(unsaved changes too; offer to save first), so a new conversation loses
+only what was said. With the recommendation give a prompt for the new
+conversation in a code block, ready to paste: photo id (and the original's,
+for a duplicate), the look wanted, the plan with steps done and left, each
+module instance added and what it does, what the user chose and rejected,
+approaches that failed, and how the user wants to work (e.g. one step at
+a time, ask before changing approach)."""
 
 mcp = FastMCP("darktable-api", instructions=INSTRUCTIONS, log_level="WARNING")
 

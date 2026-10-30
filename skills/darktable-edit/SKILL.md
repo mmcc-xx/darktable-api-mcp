@@ -226,9 +226,10 @@ it, so the number of renders and calls drives the cost.
   (paste an edit, apply a style or preset to a batch, set listed values).
   Looks, dodging and burning, and object removal stay in this session:
   fixing a weak result costs more than doing it here.
-- Suggest `/clear` when the user moves to another photo and `/compact`
-  before a new round on the same photo once there are about 10 renders
-  (server instructions: what to keep).
+- Recommend `/clear` when the user moves to another photo, and on the
+  same photo at a step boundary once there are about 10 renders, with a
+  ready-to-paste prompt for the new conversation (server instructions:
+  what it holds).
 
 ## Skipping a step
 
