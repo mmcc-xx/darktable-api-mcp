@@ -7,14 +7,19 @@ own code running as a long-lived headless engine. The engine renders previews,
 applies module settings and writes the history to the library exactly as
 darktable does. darktable's own window (built from the same fork) can serve
 the API as well instead, sharing the photo open in its darkroom live. A few
-tools require running darktable with the GUI (the color pickers and auto buttons, and switching
-darktable's darkroom to a photo), but most edits can be done headlessly. No Lua script or XMP editing is involved.
+tools need darktable's window (switching its darkroom to a photo, a few auto
+buttons such as the tone equalizer's wands); everything else, most color
+pickers included, works headless. No Lua script or XMP editing is involved.
 
-[Demo Video](https://www.youtube.com/watch?v=VDfZbxvvniY)
+darktable-api is three repositories: the
+[darktable fork](https://github.com/mmcc-xx/darktable/tree/darktable-api)
+(the engine), this MCP server (and the setup instructions for all three)
+and [darktable-api-web](https://github.com/mmcc-xx/darktable-api-web) (a
+web app). [Demo video](https://www.youtube.com/watch?v=VDfZbxvvniY)
 
 **What's included:**
 
-- **78 MCP tools** ([list](#tools)): browse the library, rate, label and tag
+- **MCP tools** ([list](#tools)): browse the library, rate, label and tag
   photos; open a photo and change any module's settings, with previews to
   check each step; presets and styles; crop and rotate; masks (drawn shapes,
   parametric ranges, AI object masks); curves; finding and healing sensor
@@ -237,8 +242,8 @@ a server over SSH, with the web app reached through an SSH tunnel
 | `analyze_cast` | the colour cast of the render: median a*/b* of likely-neutral pixels per tonal band (or of a gray card box / marker), with a warm/cool/magenta/green verdict; reads the toning of a black and white photo (needs the `[dust]` extra) |
 | `change_map` | what changed between two history steps: per grid cell the mean dE and EV change, the share changed, where, and with boxes / markers / a module's mask the change inside vs outside (leak); optional heatmap (needs the `[dust]` extra) |
 | `ai_denoise`, `job_status`, `list_jobs`, `cancel_job` | darktable's AI raw denoise as a background job: a new DNG photo beside the original, in its group (needs darktable built with AI) |
-| `ai_fill` | remove an object or blemish: an AI inpainting model (LaMa, or MI-GAN) fills a drawn shape, or the outline of an `add_ai_mask` module (`like_mask_of`), from its surroundings; shown by a new composite instance (non-destructive; needs the inpaint model installed: [Quick start](#steps), after step 7) Small to medium shapes (up to about 1300 px across); larger ones are warned about (a soft smear). In darktable's window too: draw the area as a mask on any module, then `like_mask_of` (`like_mask_shapes` for some of its shapes, by name). Online, `model="flux-erase"` (FLUX Erase, for removals: real texture such as fur) `"flux"` (FLUX.1 Fill, paints what belongs there, with a `prompt`) or `"flux3"` (FLUX 3 Image, told in `prompt` what to remove) at Black Forest Labs: only the crop around the shape is uploaded; needs your BFL key in `BFL_API_KEY` or `~/.config/darktable-api-mcp/bfl_api_key`. darktable-api on master now, the release branch from 5.8 on (not 5.6). |
-| `find_dust_spots`, `heal_dust_spots` | sensor dust: a map of dust recurring across the photo's film roll (read from the raw files, cached; small specks and large soft blobs), rated in this photo (raw files that are missing or unreadable are skipped and listed; with too few left the result says the map can't find dust); `this_photo=True` (on by default for a black and white edit) also finds dust in this photo alone, in darktable's render of the current edit (one-off spots, or faint ones a black and white red filter brings out; numbered from 101, with their own crop sheet, healed only when picked by id); heal circles in retouch as one history step (each source kept clear of the dust by the circle's feathered border), or an AI fill (`ai_fill`, darktable master) where no clean source is nearby (`method`: auto, heal, ai_fill), checked at 100% before and after. Needs `pip install 'darktable-api-mcp[dust]'` |
+| `ai_fill` | remove an object or blemish: an AI inpainting model (LaMa, or MI-GAN) fills a drawn shape, or the outline of an `add_ai_mask` module (`like_mask_of`), from its surroundings; shown by a new composite instance (non-destructive; needs the inpaint model installed: [Quick start](#steps), after step 7). Small to medium shapes (up to about 1300 px across); larger ones are warned about (a soft smear). In darktable's window too: draw the area as a mask on any module, then `like_mask_of` (`like_mask_shapes` for some of its shapes, by name). Online, `model="flux-erase"` (FLUX Erase, for removals: real texture such as fur) `"flux"` (FLUX.1 Fill, paints what belongs there, with a `prompt`) or `"flux3"` (FLUX 3 Image, told in `prompt` what to remove) at Black Forest Labs: only the crop around the shape is uploaded; needs your BFL key in `BFL_API_KEY` or `~/.config/darktable-api-mcp/bfl_api_key`. Needs the `darktable-api` branch (not 5.6) |
+| `find_dust_spots`, `heal_dust_spots` | sensor dust: a map of dust recurring across the photo's film roll (read from the raw files, cached; small specks and large soft blobs), rated in this photo (raw files that are missing or unreadable are skipped and listed; with too few left the result says the map can't find dust); `this_photo=True` (on by default for a black and white edit) also finds dust in this photo alone, in darktable's render of the current edit (one-off spots, or faint ones a black and white red filter brings out; numbered from 101, with their own crop sheet, healed only when picked by id); heal circles in retouch as one history step (each source kept clear of the dust by the circle's feathered border), or an AI fill (`ai_fill`, `darktable-api` branch) where no clean source is nearby (`method`: auto, heal, ai_fill), checked at 100% before and after. Needs `pip install 'darktable-api-mcp[dust]'` |
 | `retouch_spots`, `list_retouch_spots`, `edit_retouch_spot`, `remove_retouch_spots` | retouch circles that clone, heal, blur or fill, placed on the photo as shown; move, resize, change or delete them |
 | `fix_red_eye` | red eye from points or a marker (an area is searched for red round pupils): `desaturate` (a masked color balance rgb instance, catchlight kept) or `fill` (the local AI model, then a dark pupil and catchlight); `auto` picks; pets' eyeshine needs `fill` |
 | `list_styles`, `create_style`, `apply_style`, `delete_style` | darktable's styles: make one from a photo's edit, apply one to photos (e.g. one B&W look on a set), as the lighttable does |
@@ -263,29 +268,17 @@ starts in about 3 s on the first call.
 
 ## Requirements
 
-1. **darktable-api**, from the darktable fork
-   https://github.com/mmcc-xx/darktable (see `src/api/README.md` there). Build darktable with the API enabled
-   (`-DUSE_API=ON`, off by default), which builds `darktable-api` alongside,
-   and with AI for the AI mask and AI denoise tools:
-
-   Which branch: see [Pick a branch](#pick-a-branch)
-   (`darktable-api`; `darktable-api-5.6` is frozen).
-
-       git clone -b darktable-api --recurse-submodules https://github.com/mmcc-xx/darktable.git
-       cd darktable
-       cmake -B build -G Ninja -DUSE_API=ON -DUSE_AI=ON
-       cmake --build build
-
-   darktable's README lists the build dependencies (on macOS:
-   `brew bundle --file=.ci/Brewfile`; on Ubuntu 24.04 also `libpotrace-dev`
-   and `libarchive-dev`). The AI build downloads ONNX Runtime itself; on
-   Linux, darktable run from the build folder can't find it (it loads it by
-   file name): `cmake --install build`, or set `plugins/ai/ort_library_path`
-   in the library copy's darktablerc to
-   `build/_deps/onnxruntime/lib/libonnxruntime.so.<version>`. The AI models
-   are downloaded from darktable's preferences (AI tab), except the AI fill
-   models (`make_inpaint_models.py`, after the Quick start's steps).
-2. Python 3.10 or later.
+- **darktable-api**, built from the
+  [darktable fork](https://github.com/mmcc-xx/darktable) with `-DUSE_API=ON`
+  (off by default) and `-DUSE_AI=ON` for the AI tools: the
+  [Quick start](#steps)'s steps 1 and 2, which need the build dependencies
+  darktable's README lists. Branch: [Pick a branch](#pick-a-branch). The
+  engine's own documentation: `src/api/README.md` there.
+- Python 3.10 or later.
+- AI models: the AI mask and AI denoise models from that darktable's
+  preferences (AI tab); the AI fill models from `make_inpaint_models.py`
+  (after the Quick start's steps). On Linux, ONNX Runtime needs
+  `plugins/ai/ort_library_path` (after the Quick start's steps).
 
 ### Updating the engine
 
@@ -305,7 +298,7 @@ local commits): `git fetch origin && git reset --hard origin/darktable-api`.
 
     git clone https://github.com/mmcc-xx/darktable-api-mcp.git
     cd darktable-api-mcp
-    python -m venv .venv && .venv/bin/pip install -e .
+    python -m venv .venv && .venv/bin/pip install -e '.[dust]'
     .venv/bin/python make_library_copy.py      # ~/.config/darktable -> ./library-copy
 
 `make_library_copy.py` copies `library.db`, `data.db` and `darktablerc`
@@ -324,6 +317,9 @@ photos are only read.
 | `BFL_API_KEY` | optional; else `~/.config/darktable-api-mcp/bfl_api_key` | your Black Forest Labs key, for `ai_fill`'s online FLUX models only |
 | `BFL_API_URL` | optional; default https://api.bfl.ai/v1 | Black Forest Labs' API address (tests point it at a fake server) |
 | `DTAPI_GUI_BIN` | default: `darktable` next to `DTAPI_BIN` | the only darktable `takeover_library` may quit |
+| `DTAPI_MAX_SESSIONS`, `DTAPI_IDLE_EXIT` | 3, 600 | photos the engine keeps open, and seconds it runs after the last client left; used when this server starts the engine |
+| `DTAPI_DUST_CACHE` | default: `~/.cache/darktable-api-mcp/dust` | `find_dust_spots`' per-roll dust maps |
+| `DTAPI_HUGIN_BIN` | default: `~/.local/hugin/bin`, else the PATH | Hugin's command-line tools, for `make_panorama` |
 
 ### Claude Code
 
