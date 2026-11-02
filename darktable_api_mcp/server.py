@@ -57,6 +57,7 @@ Named masks: exposure instances at 0 EV named after the mask (made in the
 web app's masks tool; they change nothing on their own); a module after
 exposure uses one with set_blending(op, {"raster_source": {"operation":
 "exposure", "instance": N}}).
+How large a photo prints: print_size (measured detail, not pixel count).
 
 The engine is shared with the user's web app and darktable's window:
 open_photo joins an edit already open there (unsaved changes included),
@@ -1701,6 +1702,150 @@ async def change_map(before_step: int | None = None, after_step: int | None = No
         ok, png = cv2.imencode(".png", hm)
         out.append(Image(data=png.tobytes(), format="png"))
     return out
+
+
+NOT_RAW = {".tif", ".tiff", ".jpg", ".jpeg", ".png", ".heic", ".heif", ".webp", ".exr", ".avif", ".jxl", ".pfm"}
+
+
+async def _sensor_px(info: dict, exif: dict) -> tuple[int, int, str] | None:
+    """The camera's raw pixel size: the photo's own for a raw, else (a TIFF,
+    a panorama) a raw from the same camera in its folder."""
+    if exif.get("raw"):
+        return info["width"], info["height"], "the raw"
+    rolls = (await _call("film_rolls"))["film_rolls"]
+    roll = next((r for r in rolls if r["folder"] == info["folder"]), None)
+    if roll is None:
+        return None
+    page = await _call("images_list", film_id=roll["id"], rating="all", offset=0, limit=200)
+    tried = 0
+    for im in page["images"]:
+        if Path(im["filename"]).suffix.lower() in NOT_RAW or im["id"] == info["id"]:
+            continue
+        other = await _call("image_info", imgid=im["id"])
+        oe = other.get("exif", {})
+        if oe.get("raw") and oe.get("model") == exif.get("model"):
+            return im["width"], im["height"], f"photo {im['id']}, a raw from the same camera"
+        tried += 1
+        if tried >= 10:
+            break
+    return None
+
+
+def _inches(px: float, dpi: float) -> float:
+    return round(px / dpi, 1)
+
+
+@mcp.tool()
+async def print_size(dpi: int = 300, viewing_distance_in: float | None = None,
+                     regions: list[dict] | None = None, markers: list[str] | None = None,
+                     count: int = 3) -> dict:
+    """How large the open photo prints from the detail it holds, not its
+    pixel count. Renders `count` detailed regions at 100% (the most
+    textured cells of the photo, never smooth sky; or markers / regions,
+    boxes {left, top, right, bottom} as fractions, on the subject that
+    matters) and measures each one's usable-detail factor: 1 = sharp at
+    every pixel, 0.6 = as sharp as the photo at 60% of its size (a
+    downscale and re-upscale test, read against a sharp copy of the same
+    region). Effective width = output width x the median factor.
+    Returns output_px (after the crop), the factor per region and its
+    spread, edge_width_px (10-90% rise across hard edges; 1-2 px is
+    sharp, noisy, a hint only), effective_px, sizes in inches and cm:
+    nominal (all pixels at dpi), critical (effective at dpi, close
+    inspection), normal (effective at 200 dpi, arm's length), wall
+    (effective at 150 dpi, 4-5 ft), viewing (effective at the dpi the eye
+    resolves at viewing_distance_in, 3438 / inches, if given); causes with
+    numbers (diffraction blur in px from aperture and pixel pitch, a
+    processed or stitched file, uneven regions) and fixes. Read the factor
+    on the subject, not the frame average. Adjust in your answer for the
+    subject: smooth subjects (sand, fog, water, skin) can go up a tier,
+    fine texture people inspect (foliage, architecture, text) stays at
+    critical. Takes ~1 s a region; changes nothing."""
+    from . import detail as D
+    import numpy as np
+    import cv2
+    await _require("render.zoom", "geometry_get")
+    image_id = engine.image_id
+    if image_id is None:
+        raise ToolError("no photo is open: call open_photo(image_id) first")
+    dpi = max(50, min(int(dpi), 1200))
+    g = await _edit(image_id, "geometry_get")
+    W, H = int(g["width"]), int(g["height"])
+
+    async def render(w: int, h: int, region: dict | None):
+        try:
+            r = await engine.render(image_id, w, h, False, region, quality=95)
+        except EngineError as exc:
+            raise _err(exc)
+        if r is None:
+            raise ToolError("overtaken by a newer render request; try again")
+        return cv2.imdecode(np.frombuffer(r[0], np.uint8), cv2.IMREAD_COLOR)
+
+    centers: list[dict] = []
+    for name in markers or []:
+        m = await _marker(name)
+        centers.append({"x": m["center"][0], "y": m["center"][1], "from": f"marker '{m['name']}'"})
+    for b in regions or []:
+        try:
+            centers.append({"x": (b["left"] + b["right"]) / 2, "y": (b["top"] + b["bottom"]) / 2, "from": "region"})
+        except KeyError:
+            raise ToolError("regions: boxes {left, top, right, bottom} as fractions of the photo")
+    if not centers:
+        fit = await render(1024, 1024, None)
+        centers = [dict(c, **{"from": "most detailed cell"}) for c in D.pick_regions(fit, max(1, min(count, 6)))]
+    tile = 512 if min(W, H) >= 1024 else max(128, min(W, H) // 2)
+    found = []
+    for c in centers:
+        cx, cy = min(max(c["x"], 0.0), 1.0), min(max(c["y"], 0.0), 1.0)
+        im = D.gray(await render(tile, tile, {"zoom": 1.0, "center_x": cx, "center_y": cy}))
+        ew = D.edge_width(im)
+        found.append({"x": round(cx, 3), "y": round(cy, 3), "from": c["from"],
+                      "factor": round(D.detail_factor(im), 2),
+                      "edge_width_px": None if ew is None else round(ew, 1)})
+    fs = sorted(r["factor"] for r in found)
+    factor = float(np.median(fs))
+    eff_w, eff_h = W * factor, H * factor
+
+    def size(px_w: float, px_h: float, at: float) -> dict:
+        return {"dpi": round(at), "width_in": _inches(px_w, at), "height_in": _inches(px_h, at),
+                "width_cm": round(2.54 * px_w / at, 1), "height_cm": round(2.54 * px_h / at, 1)}
+
+    sizes = {"nominal": size(W, H, dpi), "critical": size(eff_w, eff_h, dpi),
+             "normal": size(eff_w, eff_h, 200), "wall": size(eff_w, eff_h, 150)}
+    if viewing_distance_in:
+        sizes["viewing"] = dict(size(eff_w, eff_h, max(30.0, 3438.0 / viewing_distance_in)),
+                                distance_in=viewing_distance_in)
+
+    info = await _call("image_info", imgid=image_id)
+    img, exif = info["image"], info.get("exif", {})
+    causes, fixes = [], []
+    sensor = await _sensor_px(img, exif)
+    pitch = D.pixel_pitch_um(exif.get("crop_factor"), *(sensor[:2] if sensor else (None, None)))
+    airy = D.airy_px(exif.get("aperture"), pitch)
+    physics = {"aperture": exif.get("aperture"), "crop_factor": exif.get("crop_factor"),
+               "pixel_pitch_um": None if pitch is None else round(pitch, 2),
+               "pitch_from": sensor[2] if sensor else None,
+               "diffraction_px": None if airy is None else round(airy, 1)}
+    if airy is not None and airy >= 1.5 and factor < 0.85:
+        causes.append(f"diffraction: f/{exif['aperture']:g} spreads a point over {airy:.1f} px "
+                      f"(Airy disk {2.44 * 0.55 * exif['aperture']:.1f} um, pixel pitch {pitch:.2f} um)")
+    elif airy is None:
+        causes.append("diffraction unknown: no aperture, crop factor or raw size for the camera")
+    if not exif.get("raw"):
+        causes.append("a processed file (TIFF / JPEG, a stitched panorama): resampling, stitching and "
+                      "the export's sharpening and noise reduction soften or fake detail")
+    if fs[-1] - fs[0] > 0.2:
+        causes.append(f"uneven: regions range {fs[0]:.2f}-{fs[-1]:.2f} (focus, motion, a lens's corners or "
+                      "a stitch's frames); the median is used, check which region is the subject")
+    if factor < 0.85:
+        fixes.append("capture sharpening (auto_capture_sharpen) recovers part of diffraction and lens softness; "
+                     "measure again after it")
+        if (exif.get("iso") or 0) >= 1600:
+            fixes.append(f"denoise first (ISO {exif['iso']:g}), so sharpening and any upscale don't enhance noise")
+        fixes.append("print larger than critical only for viewing from a distance (the normal and wall sizes)")
+    return {"output_px": {"width": W, "height": H}, "factor": round(factor, 2),
+            "factor_spread": [fs[0], fs[-1]], "regions": found,
+            "effective_px": {"width": round(eff_w), "height": round(eff_h)},
+            "sizes": sizes, "physics": physics, "causes": causes, "fixes": fixes}
 
 
 # ── blending and masks ───────────────────────────────────────────────────────
