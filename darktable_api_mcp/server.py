@@ -53,6 +53,10 @@ add_ai_mask outline via like_mask_of, from its surroundings; a composite
 instance, non-destructive). Small spots: retouch_spots. Red eye: fix_red_eye.
 Markers: points and areas the user drew and named in the web app
 (list_markers); tools take marker=name instead of coordinates.
+Named masks: exposure instances at 0 EV named after the mask (made in the
+web app's masks tool; they change nothing on their own); a module after
+exposure uses one with set_blending(op, {"raster_source": {"operation":
+"exposure", "instance": N}}).
 
 The engine is shared with the user's web app and darktable's window:
 open_photo joins an edit already open there (unsaved changes included),
