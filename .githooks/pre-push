@@ -1,0 +1,14 @@
+#!/bin/sh
+# Lint GitHub workflow files before they reach GitHub: a broken one fails
+# in 0 s, skips its schedule and opens no "failure" issue (review A7.1,
+# 2026-10-24/25). Errors and shellcheck warnings block; style notes don't.
+# Enabled with: git config core.hooksPath .githooks
+ls .github/workflows/*.yml >/dev/null 2>&1 || exit 0
+if ! command -v actionlint >/dev/null 2>&1; then
+  echo "pre-push: actionlint missing (brew install actionlint shellcheck); workflows not checked" >&2
+  exit 0
+fi
+SHELLCHECK_OPTS="-S warning" actionlint .github/workflows/*.yml || {
+  echo "pre-push: fix the workflow errors above (or push with --no-verify)" >&2
+  exit 1
+}
