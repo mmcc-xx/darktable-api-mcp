@@ -58,6 +58,10 @@ web app's masks tool; they change nothing on their own); a module after
 exposure uses one with set_blending(op, {"raster_source": {"operation":
 "exposure", "instance": N}}).
 How large a photo prints: print_size (measured detail, not pixel count).
+Immich (the user's photo server): immich_open(asset id or URL) imports an Immich photo
+to edit; immich_inbox lists the "Edit in darktable" album; after save, immich_send
+puts the edit back (stacked over an Immich original; a resend trashes only our
+previous upload). Ask which albums (immich_albums) the first time a photo is sent.
 
 The engine is shared with the user's web app and darktable's window:
 open_photo joins an edit already open there (unsaved changes included),
@@ -3456,6 +3460,298 @@ async def make_panorama(photo_ids: list[int], fixes: dict | None = None, project
         raise ToolError(str(exc))
     except EngineError as exc:
         raise _err(exc)
+
+
+# ── Immich ───────────────────────────────────────────────────────────────────
+# Photos come from and go back to the user's Immich server (#56) through its
+# API (immich.py); Immich itself is not changed. The links live on the
+# darktable side, as private tags (left out of exports): immich|source|<id>
+# (the Immich original a photo was imported from) and immich|export|<id>
+# (the asset of its latest upload).
+
+def _immich_dir() -> Path:
+    from . import immich
+    return Path(immich.setting("DTAPI_IMMICH_DIR", str(Path.home() / "Pictures/immich"))).expanduser()
+
+
+
+IMMICH_EXPORTS = Path(os.environ.get("DTAPI_IMMICH_EXPORTS") or Path.home() / ".cache/darktable-api-mcp/immich")
+_PROCESSED_TYPES = {"image/jpeg", "image/png", "image/heic", "image/heif", "image/webp", "image/tiff", "image/avif"}
+
+
+def _immich():
+    from . import immich
+    try:
+        return immich.Immich()
+    except immich.ImmichError as exc:
+        raise ToolError(str(exc))
+
+
+async def _immich_links(imgid: int) -> dict:
+    tags = (await _call("image_metadata", imgid=imgid))["tags"]
+    link = {"source": None, "export": []}
+    for t in tags:
+        parts = t.split("|")
+        if len(parts) == 3 and parts[0] == "immich" and parts[1] in link:
+            if parts[1] == "source":
+                link["source"] = parts[2]
+            else:
+                link["export"].append(parts[2])
+    return link
+
+
+async def _immich_find(asset: str) -> int | None:
+    """The darktable photo imported from an Immich asset, if any."""
+    r = await _call("images_list", tag=f"immich|source|{asset}", rating="all", limit=5)
+    return r["images"][0]["id"] if r["images"] else None
+
+
+def _exif_iso(taken: str | None) -> str | None:
+    """darktable's EXIF date ("2024:01:26 21:10:32.000") as ISO 8601."""
+    if not taken or len(taken) < 19:
+        return None
+    return taken[:10].replace(":", "-") + "T" + taken[11:19] + ".000Z"
+
+
+async def _immich_import(im, asset: str) -> dict:
+    """Download an Immich original into DTAPI_IMMICH_DIR/<year>/ and import
+    it, linked; an asset imported before gives the same photo."""
+    from . import immich
+    found = await _immich_find(asset)
+    if found is not None:
+        try:
+            mime = (await im.asset(asset)).get("originalMimeType")
+        except immich.ImmichError:
+            mime = None
+        return {"image_id": found, "imported": False, "jpeg_source": mime in _PROCESSED_TYPES}
+    a = await im.asset(asset)
+    if a.get("type") != "IMAGE":
+        raise ToolError(f"Immich asset {asset} is a {a.get('type', '?').lower()}, not a photo")
+    if a.get("isTrashed"):
+        raise ToolError(f"Immich asset {asset} is in Immich's trash")
+    top = _immich_dir()
+    if not top.parent.is_dir():
+        raise ToolError(f"{top.parent} doesn't exist (a drive not mounted?): check DTAPI_IMMICH_DIR")
+    taken = (a.get("exifInfo") or {}).get("dateTimeOriginal") or a.get("fileCreatedAt") or ""
+    dest = top / (taken[:4] or "unknown") / Path(a["originalFileName"]).name
+    if dest.exists() and immich.checksum(dest) != a["checksum"]:
+        dest = dest.with_name(f"{dest.stem}_{asset[:8]}{dest.suffix}")   # another photo of that name
+    if not dest.exists() or immich.checksum(dest) != a["checksum"]:
+        await im.download(asset, dest)
+        if immich.checksum(dest) != a["checksum"]:
+            dest.unlink(missing_ok=True)
+            raise ToolError(f"the download of {asset} doesn't match Immich's checksum: removed, try again")
+    r = await _run_job(lambda: _call("import", paths=[str(dest)], copy=False, recursive=False,
+                                     skip_existing=True), True, 600)
+    res = r.get("result") or {}
+    got = (res.get("imported") or []) + (res.get("skipped") or [])
+    if not got or not got[0].get("imgid"):
+        raise ToolError(f"darktable didn't import {dest}: {(res.get('failed') or [r])[0]}")
+    imgid = got[0]["imgid"]
+    await _call("set_tags", imgids=[imgid], attach=[f"immich|source|{asset}"], private=True)
+    return {"image_id": imgid, "imported": True, "file": str(dest),
+            "jpeg_source": a.get("originalMimeType") in _PROCESSED_TYPES}
+
+
+_JPEG_NOTE = ("the original is a JPEG (or another processed format): exposure, white balance and highlights "
+              "are baked in, so they bend less than a raw's; crops, tones, color, retouching, AI fill and "
+              "black and white are fine")
+
+
+async def _immich_call(coro):
+    from . import immich
+    try:
+        return await coro
+    except immich.ImmichError as exc:
+        raise ToolError(str(exc))
+
+
+@mcp.tool()
+async def immich_open(asset: str) -> dict:
+    """Edit a photo from the user's Immich in darktable: asset is its Immich
+    id or URL (…/photos/<id>). The original (JPEG or raw) is downloaded
+    into DTAPI_IMMICH_DIR/<year>/ (default ~/Pictures/immich), imported and
+    opened; one imported before just opens again (no second copy). Immich
+    is not changed. When done: save, then immich_send to put the edit
+    back in Immich, stacked over the original."""
+    await _require("set_tags.private", "import")
+    from . import immich
+    try:
+        aid = immich.asset_id(asset)
+    except immich.ImmichError as exc:
+        raise ToolError(str(exc))
+    async with _immich() as im:
+        got = await _immich_call(_immich_import(im, aid))
+    opened = await open_photo(got["image_id"])
+    out = {**got, "immich_asset": aid, "photo": opened}
+    if got.get("jpeg_source"):
+        out["note"] = _JPEG_NOTE
+    return out
+
+
+@mcp.tool()
+async def immich_inbox(import_new: bool = False) -> dict:
+    """The Immich inbox: the album "Edit in darktable" (IMMICH_INBOX), where
+    the user puts Immich photos to edit here. Lists each with its darktable
+    photo if already imported; import_new=True imports the others (as
+    immich_open, without opening). A photo leaves the inbox once
+    immich_send sends its edit back."""
+    await _require("set_tags.private", "import")
+    from . import immich
+    async with _immich() as im:
+        box = await _immich_call(im.album_named(immich.INBOX))
+        if not box:
+            return {"inbox": immich.INBOX, "photos": [],
+                    "note": f"no album named {immich.INBOX!r} in Immich: the user creates it and adds photos"}
+        assets = await _immich_call(im.album_assets(box["id"]))
+        photos = []
+        for a in assets:
+            item = {"asset": a["id"], "file": a.get("originalFileName"),
+                    "taken": (a.get("exifInfo") or {}).get("dateTimeOriginal") or a.get("fileCreatedAt"),
+                    "jpeg_source": a.get("originalMimeType") in _PROCESSED_TYPES,
+                    "image_id": await _immich_find(a["id"])}
+            if item["image_id"] is None and import_new and a.get("type") == "IMAGE":
+                try:
+                    got = await _immich_call(_immich_import(im, a["id"]))
+                    item.update(image_id=got["image_id"], imported=True)
+                except ToolError as exc:
+                    item["error"] = str(exc)
+            photos.append(item)
+    return {"inbox": immich.INBOX, "album_id": box["id"], "photos": photos}
+
+
+@mcp.tool()
+async def immich_albums(image_id: int | None = None) -> dict:
+    """The user's Immich albums (name, id, photo count), for immich_send's
+    albums; with image_id (or the open photo, if it was sent before), also
+    the albums its latest upload is in (a resend keeps those)."""
+    from . import immich
+    out: dict[str, Any] = {}
+    async with _immich() as im:
+        out["albums"] = [{"name": a["albumName"], "id": a["id"], "count": a.get("assetCount")}
+                         for a in await _immich_call(im.albums())]
+        imgid = image_id if image_id is not None else engine.image_id
+        if imgid is not None:
+            link = await _immich_links(imgid)
+            out["image_id"] = imgid
+            out["link"] = link
+            if link["export"]:
+                try:
+                    out["sent_to"] = [a["albumName"] for a in await im.albums(link["export"][-1])]
+                except immich.ImmichError:
+                    out["sent_to"] = []
+    return out
+
+
+@mcp.tool()
+async def immich_send(image_id: int | None = None, albums: list[str] | None = None,
+                      new_album: str | None = None, save_first: bool = False) -> dict:
+    """Send a photo's edit (default: the open one) to the user's Immich: a
+    JPEG export of the SAVED edit (darktable's export settings; unsaved
+    changes refused unless save_first: ask the user) is uploaded and:
+    - a photo from Immich (immich_open): goes into the original's albums,
+      with its favorite and capture date, stacked with the edit on top and
+      the original under it (never changed); it leaves the inbox album;
+    - a resend: the new upload takes the previous one's albums, favorite
+      and stack place, and the previous upload goes to Immich's trash
+      (only ever our own upload, never an original);
+    - albums: Immich album names or ids to add it to as well
+      (immich_albums lists them); new_album: a new album's name (an
+      existing album of that name is used instead).
+    Ask the user which albums for a photo never sent. Returns the asset
+    id and its albums."""
+    await _require("set_tags.private")
+    from . import immich
+    imgid = image_id if image_id is not None else engine.image_id
+    if imgid is None:
+        raise ToolError("give image_id, or open a photo first")
+    link = await _immich_links(imgid)
+    async with _immich() as im:
+        all_albums = await _immich_call(im.albums())
+        picked: list[str] = []
+        for want in albums or []:
+            hit = [a for a in all_albums if a["id"] == want or a["albumName"].casefold() == want.casefold()]
+            if not hit:
+                raise ToolError(f"no Immich album {want!r}: immich_albums lists them (new_album= makes one)")
+            picked.append(hit[0]["id"])
+        src = prev = None
+        if link["source"]:
+            try:
+                src = await im.asset(link["source"])
+            except immich.ImmichError:
+                src = None
+            if src and src.get("isTrashed"):
+                src = None
+        for old in reversed(link["export"]):
+            try:
+                a = await im.asset(old)
+            except immich.ImmichError:
+                continue
+            if not a.get("isTrashed"):
+                prev = a
+                break
+        if link["source"] and not src:
+            raise ToolError(f"the Immich original {link['source']} is gone or in the trash: "
+                            "not sending (restore it in Immich first)")
+
+        r = await export_photo(image_id=imgid, format="jpeg", save_first=save_first, on_conflict="overwrite",
+                               path=str(IMMICH_EXPORTS / str(imgid) / "$(FILE_NAME)"))
+        if not r.get("file"):
+            raise ToolError(f"the export wrote no file: {r}")
+        file = Path(r["file"])
+        info = await _call("image_info", imgid=imgid)
+        src_taken = ((src or {}).get("exifInfo") or {}).get("dateTimeOriginal")
+        created = (src_taken or (src or {}).get("fileCreatedAt")
+                   or _exif_iso((info.get("exif") or {}).get("taken"))
+                   or time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime()))
+        new, status = await _immich_call(im.upload(file, created))
+        if src and new == src["id"]:
+            raise ToolError("the export is byte for byte the Immich original: nothing to send")
+        if prev and new == prev["id"]:
+            return {"image_id": imgid, "asset": new, "unchanged": True,
+                    "note": "this edit was sent already (the same JPEG): nothing changed in Immich"}
+
+        # linked at once, so a failure below leaves it ours to trash on the next send
+        await _call("set_tags", imgids=[imgid], attach=[f"immich|export|{new}"], private=True)
+
+        async def go():
+            base = prev or src
+            if base:
+                await im.copy(base["id"], new, albums=True, favorite=True, stack=True)
+            stack = None
+            if src or prev:
+                stack = (await im.asset(new)).get("stack")
+                if stack:
+                    await im.set_primary(stack["id"], new)
+                elif src:
+                    stack = await im.create_stack([new, src["id"]])
+            if src and src_taken:
+                await im.update(new, dateTimeOriginal=src_taken)
+            add = list(picked)
+            if new_album:
+                hit = [a for a in all_albums if a["albumName"] == new_album]
+                add.append(hit[0]["id"] if hit else (await im.create_album(new_album))["id"])
+            await im.add_to_albums(add, [new])
+            if src:
+                box = [a for a in all_albums if a["albumName"] == immich.INBOX]
+                if box:
+                    await im.remove_from_album(box[0]["id"], [src["id"], new])
+            trashed = None
+            if prev and prev["id"] not in (new, (src or {}).get("id")):
+                st = (await im.asset(prev["id"])).get("stack")
+                if st and st.get("assetCount", 0) > 2:
+                    await im.remove_from_stack(st["id"], prev["id"])
+                await im.trash([prev["id"]])
+                trashed = prev["id"]
+            return stack, trashed
+        stack, trashed = await _immich_call(go())
+        old = [f"immich|export|{x}" for x in link["export"] if x != new]
+        if old:
+            await _call("set_tags", imgids=[imgid], detach=old)
+        now_in = [a["albumName"] for a in await _immich_call(im.albums(new))]
+    return {"image_id": imgid, "asset": new, "upload": status, "file": str(file), "albums": now_in,
+            "stacked_over": src["id"] if src else None, "stack": (stack or {}).get("id"),
+            "trashed_previous": trashed}
 
 
 # ── background jobs ──────────────────────────────────────────────────────────
