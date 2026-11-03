@@ -13,8 +13,9 @@ translation of it into tool calls and checks.
 ## Before you start
 
 1. **Find the photo.** If the user says "this photo" or "the one I have
-   open", call `library_status`; if `darkroom_imgid` is set, use
-   `open_darkroom_photo`. A number ("photo 36", "id 36") is the library
+   open", call `library_status`; if `darkroom_imgid` (darktable's window)
+   or `web_imgid` (the web app, headless) is set, use
+   `open_darkroom_photo` and say which photo it took. A number ("photo 36", "id 36") is the library
    id: `open_photo(36)` directly. A file name: search `list_images`
    (`rating="all"`: by default it hides rejected photos) or
    `get_collection` (what darktable's lighttable shows). Ask only if
