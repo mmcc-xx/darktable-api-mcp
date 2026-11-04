@@ -43,6 +43,15 @@ Call `add_mask` on its own and read the result before `set_blending` or
 shape, and an exposure change sent in the same batch hits the whole
 photo.
 
+**Name the mask** by default: `named="background"` on `add_mask`,
+`add_ai_mask` or `set_blending` puts the mask on a named mask (an
+exposure instance at 0 EV with that name) and lets the module you give
+use it as a raster mask. The user can then see and adjust it in the web
+app's masks tool, and other modules can share it (the same `named=`, or
+`raster_source`). The mask works on the input of the named mask, which is
+made right before the module, so ranges read the same values. Mask
+straight on the module only for a throwaway mask.
+
 **Two tries, then change the mask type.** If two attempts at one mask
 (shape or range) still leave a visible edge, a gap or spill, don't keep
 moving points and thresholds: switch type (path → gradient, brightness →
@@ -61,7 +70,7 @@ hue, drawn → AI) or show the user and ask.
 | An irregular area you can outline | path | `add_mask(op, "path", points=[[x, y], ...], feather)` |
 | A stroke along something (a road, a branch) | brush | `add_mask(op, "brush", points, width, hardness)` |
 | Shadows, highlights, a color | parametric | `set_blending(op, {"parametric": {...}})` |
-| The same area as another module's mask | raster | `set_blending(op, {"raster_source": {"operation", "instance"}})` |
+| The same area as another module's mask | raster | the same `named="..."`, or `set_blending(op, {"raster_source": {"operation", "instance"}})` |
 | Edges and corners (vignette) | ellipse, inverted | `add_mask(op, "ellipse", 0.5, 0.5, radius, radius_y, feather=0.3, inverted=True)` |
 
 Positions are fractions of the photo as `render_preview` shows it; radius

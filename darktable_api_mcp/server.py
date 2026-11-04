@@ -53,10 +53,12 @@ add_ai_mask outline via like_mask_of, from its surroundings; a composite
 instance, non-destructive). Small spots: retouch_spots. Red eye: fix_red_eye.
 Markers: points and areas the user drew and named in the web app
 (list_markers); tools take marker=name instead of coordinates.
-Named masks: exposure instances at 0 EV named after the mask (made in the
-web app's masks tool; they change nothing on their own); a module after
-exposure uses one with set_blending(op, {"raster_source": {"operation":
-"exposure", "instance": N}}).
+Named masks: exposure instances at 0 EV named after the mask (the web
+app's masks tool shows and adjusts them; they change nothing on their own).
+Make masks the user may want to see or adjust named: add_mask,
+add_ai_mask and set_blending take named="background", put the mask there
+and let the module given use it (raster_source); several modules can
+share one.
 How large a photo prints: print_size (measured detail, not pixel count).
 Immich (the user's photo server): immich_open(asset id or URL) imports an Immich photo
 to edit; immich_inbox lists the "Edit in darktable" album; after save, immich_send
@@ -1896,9 +1898,100 @@ async def get_blending(operation: str, instance: int = 0) -> dict:
     return await _edit(None, "blend_get", operation=operation, instance=instance)
 
 
+async def _named_holder(name: str) -> tuple[int, bool]:
+    """The exposure instance holding the named mask `name` (the web app's
+    masks tool: named, 0 EV), made after exposure 0 if there is none; and
+    whether it is new."""
+    name = name.strip()
+    if not name:
+        raise ToolError("named: give the mask a name, e.g. \"background\"")
+    mods = (await _edit(None, "module_list"))["modules"]
+    for m in mods:
+        if m["operation"] == "exposure" and (m.get("name") or "").strip().lower() == name.lower():
+            if m["instance"] == 0:
+                raise ToolError(f"exposure 0 is named {name!r}: that's the photo's own exposure, not a mask; "
+                                "pick another name")
+            g = await _edit(None, "module_get", operation="exposure", instance=m["instance"])
+            ev = next((f["value"] for f in g["fields"] if f["name"] == "exposure"), 0.0)
+            if abs(ev) > 1e-6:
+                raise ToolError(f"exposure {m['instance']} is named {name!r} but changes exposure ({ev:+.2f} EV), "
+                                "so it isn't a named mask: pick another name")
+            return m["instance"], False
+    ex = (await _edit(None, "module_add", operation="exposure", instance=0))["instance"]
+    try:
+        await _edit(None, "module_rename", operation="exposure", instance=ex, name=name)
+        g = await _edit(None, "module_get", operation="exposure", instance=ex)
+        if abs(next((f["value"] for f in g["fields"] if f["name"] == "exposure"), 0.0)) > 1e-9:
+            await _edit(None, "module_set", operation="exposure", instance=ex, values={"exposure": 0.0})
+    except (EngineError, ToolError):
+        await _drop_holder(ex)
+        raise
+    return ex, True
+
+
+async def _drop_holder(ex: int) -> None:
+    try:
+        await _edit(None, "module_remove", operation="exposure", instance=ex)
+    except (EngineError, ToolError):
+        pass
+
+
+async def _use_named(ex: int, new: bool, operation: str, instance: int, inverted: bool = False) -> dict:
+    """Let operation/instance work through the named mask on exposure `ex`
+    (raster_source). The mask must come before it in the pipe: a new one
+    moves right before it, so parametric ranges read the module's input."""
+    if operation == "exposure" and instance == ex:
+        raise ToolError("a named mask can't be used by itself: give the module that should use it")
+
+    def pos(mods, op, inst):
+        return next((i for i, m in enumerate(mods) if m["operation"] == op and m["instance"] == inst), None)
+
+    mods = (await _edit(None, "module_list"))["modules"]
+    t = pos(mods, operation, instance)
+    if t is None:
+        raise ToolError(f"{operation} {instance} isn't on this photo")
+    h = pos(mods, "exposure", ex)
+    if new and h != t - 1:
+        try:
+            await _edit(None, "module_move", operation="exposure", instance=ex,
+                        before={"operation": operation, "instance": instance})
+        except ToolError:
+            pass                       # darktable's rules said no: it stays after exposure 0
+        mods = (await _edit(None, "module_list"))["modules"]
+        t, h = pos(mods, operation, instance), pos(mods, "exposure", ex)
+    if h is None or h > t:
+        raise ToolError(f"the named mask (exposure {ex}) comes after {operation} {instance} in the pipe, "
+                        f"so it can't use it: move_module(\"exposure\", {ex}, before=\"{operation}\", "
+                        f"before_instance={instance}) first")
+    return await _edit(None, "blend_set", operation=operation, instance=instance,
+                       values={"raster_source": {"operation": "exposure", "instance": ex},
+                               "raster_inverted": inverted})
+
+
+async def _named_mask(named: str, operation: str | None, instance: int, put, inverted: bool = False) -> dict:
+    """Put a mask on the named mask `named` (put(ex) draws it on exposure
+    ex), then hook operation/instance to it; a new holder is removed again
+    if either step fails."""
+    ex, new = await _named_holder(named)
+    try:
+        r = await put(ex)
+        used = await _use_named(ex, new, operation, instance, inverted) if operation else None
+    except (EngineError, ToolError):
+        if new:
+            await _drop_holder(ex)
+        raise
+    out = {**r, "named": named.strip(), "mask": {"operation": "exposure", "instance": ex}, "new": new}
+    if operation:
+        out["used_by"] = {"operation": operation, "instance": instance}
+        if isinstance(used, dict) and used.get("history_end") is not None:
+            out["history_end"] = used["history_end"]
+    return out
+
+
 @mcp.tool(structured_output=False)
 async def set_blending(operation: str, values: dict[str, Any], instance: int = 0,
-                       preview: bool | dict = False, measure: dict | None = None) -> dict | list:
+                       preview: bool | dict = False, measure: dict | None = None,
+                       named: str | None = None) -> dict | list:
     """Change a module's blending as one history step (all or nothing).
     values (as get_blending): masks, blend_mode, reverse, opacity (0-100),
     blend_parameter, feathering_radius (0-250), blur_radius (0-100),
@@ -1911,10 +2004,23 @@ async def set_blending(operation: str, values: dict[str, Any], instance: int = 0
     modules (18 = middle gray, 9 = -1 EV), e.g. denoise only the shadows:
     set_blending("denoiseprofile", {"parametric": {"g_in": {"range": [0, 0, 6, 13]}}}).
     Ranges apply to this module's input, not the render: check with
-    render_preview(zoom=...) or preview, measure as set_module."""
+    render_preview(zoom=...) or preview, measure as set_module.
+    named="background": set values on the named mask "background" instead
+    (an exposure instance at 0 EV with that name, made if there is none,
+    right before the module; the web app's masks tool shows and adjusts
+    it) and let operation/instance use it as its raster mask
+    (operation="" only makes the mask). Prefer it for masks the user may
+    want to see or adjust, or to reuse in several modules, e.g.
+    set_blending("exposure", {"parametric": {"Cz_in": {"range": [20, 22, 30, 32],
+    "inverted": true}}}, instance=1, named="background")."""
     await _require("blend_set")
-    return await _and_look(await _edit(None, "blend_set", operation=operation, values=values, instance=instance),
-                           preview, measure)
+    if named is not None:
+        await _require("module_add", "module_rename", "module_move")
+        r = await _named_mask(named, operation or None, instance,
+                              lambda ex: _edit(None, "blend_set", operation="exposure", values=values, instance=ex))
+    else:
+        r = await _edit(None, "blend_set", operation=operation, values=values, instance=instance)
+    return await _and_look(r, preview, measure)
 
 
 async def _photo_to_raw(points: list[list[float]]) -> tuple[list[list[float]], int, int]:
@@ -1986,7 +2092,7 @@ async def add_mask(operation: str, shape: str, x: float | None = None, y: float 
                    feather: float = 0.05, compression: float = 0.5, points: list[list[float]] | None = None,
                    width: float = 0.03, hardness: float = 0.5, density: float = 1.0,
                    combine: str = "union", inverted: bool = False, instance: int = 0,
-                   marker: str | None = None, corners: str | None = None) -> dict:
+                   marker: str | None = None, corners: str | None = None, named: str | None = None) -> dict:
     """Draw a mask shape on a module so it acts only there (one history
     step). x, y: fractions 0-1 of the photo as shown; radius, feather:
     fractions of its shorter side. marker: a name from list_markers instead
@@ -2000,26 +2106,38 @@ async def add_mask(operation: str, shape: str, x: float | None = None, y: float 
     marker's default). "brush": a stroke along points, width (half its
     thickness), hardness, density; corners as path (sharp: a polyline). combine with earlier shapes: union, intersection, difference,
     exclusion (darktable master also screen: a soft union, product, sum);
-    inverted: act outside it."""
+    inverted: act outside it.
+    named="background": draw on the named mask "background" instead (an
+    exposure instance at 0 EV with that name, made if there is none; the
+    web app's masks tool shows and adjusts it) and let operation/instance
+    use it as its raster mask (operation="" only makes the mask). Prefer
+    it for masks the user may want to see or adjust, or to reuse."""
     await _require("mask_add", "coords")
     if marker:
         shape, x, y, points, mcorners = await _marker_shape(marker)
         corners = corners or await _marker_corners(mcorners)
     sh = await _shape_on_raw(shape, x, y, radius, radius_y, rotation, feather, compression, points,
                              width, hardness, density, corners)
+    if named is not None:
+        await _require("module_add", "module_rename", "module_move")
+        return await _named_mask(named, operation or None, instance,
+                                 lambda ex: _edit(None, "mask_add", operation="exposure", instance=ex, shape=sh,
+                                                  combine=combine, inverted=inverted))
     return await _edit(None, "mask_add", operation=operation, instance=instance, shape=sh,
                        combine=combine, inverted=inverted)
 
 
 @mcp.tool()
 async def add_ai_mask(operation: str, include: list[list[float]], exclude: list[list[float]] | None = None,
-                      combine: str = "union", inverted: bool = False, instance: int = 0) -> dict:
+                      combine: str = "union", inverted: bool = False, instance: int = 0,
+                      named: str | None = None) -> dict:
     """Mask a module to an object with darktable's AI object mask (SAM),
     as one history step: include points [[x, y], ...] on it (fractions of
     the photo as shown; one is enough), exclude points beside it; its
     outline becomes path shapes. combine/inverted as add_mask. The first
     call on a photo takes a few seconds. Returns formid (for remove_mask),
-    paths and area. Needs darktable with AI enabled."""
+    paths and area. Needs darktable with AI enabled. named="sky": on the
+    named mask "sky" instead, used by operation/instance, as add_mask."""
     await _require("mask_ai")
     if await engine.supports("mask_ai_encode"):
         # the slow first step (encoding the photo) in the background
@@ -2028,8 +2146,14 @@ async def add_ai_mask(operation: str, include: list[list[float]], exclude: list[
             raise ToolError(enc.get("error") or f"encoding the photo for AI masks ended {enc.get('state')}")
     points = ([{"x": p[0], "y": p[1], "include": True} for p in include]
               + [{"x": p[0], "y": p[1], "include": False} for p in (exclude or [])])
-    r = await _edit(None, "mask_ai", operation=operation, instance=instance, points=points,
-                    combine=combine, inverted=inverted)
+    if named is not None:
+        await _require("module_add", "module_rename", "module_move")
+        r = await _named_mask(named, operation or None, instance,
+                              lambda ex: _edit(None, "mask_ai", operation="exposure", instance=ex, points=points,
+                                               combine=combine, inverted=inverted))
+    else:
+        r = await _edit(None, "mask_ai", operation=operation, instance=instance, points=points,
+                        combine=combine, inverted=inverted)
     if r.get("area", 0) > 0.8:
         r["hint"] = ("the mask covers most of the photo: if that isn't the object, remove it "
                      "(remove_mask) and try again with exclude points around the object")
