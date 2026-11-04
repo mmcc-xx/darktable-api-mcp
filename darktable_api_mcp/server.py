@@ -1892,7 +1892,7 @@ async def print_size(dpi: int = 300, viewing_distance_in: float | None = None,
 async def get_blending(operation: str, instance: int = 0) -> dict:
     """A module's blending: masks, blend_mode, opacity, feathering and
     the other values set_blending takes, drawn_shapes (count), the
-    parametric ranges that are on, and the channels the module's color
+    parametric ranges that are on (with each channel's boost, EV), and the channels the module's color
     space offers (e.g. g, R, G, B, Jz, Cz, hz; or L, a, b, C, h)."""
     await _require("blend_get")
     return await _edit(None, "blend_get", operation=operation, instance=instance)
@@ -1999,8 +1999,11 @@ async def set_blending(operation: str, values: dict[str, Any], instance: int = 0
     raster_source {"operation", "instance"} (another module's mask; null
     removes it), raster_inverted, and parametric: per channel and
     direction (e.g. "g_in") {"range": [low end, low full, high full, high
-    end], "inverted": true} or null (off), in the darkroom's units; ranges
-    switch the parametric mask on. g and R/G/B are linear on scene-referred
+    end], "inverted": true, "boost": EV} or null (off), in the darkroom's
+    units; ranges switch the parametric mask on. boost (0..18 EV, not on
+    hue, S, l) doubles a channel's top per EV (g, R/G/B, L, C: 100 at 0;
+    Jz, Cz: 1 at 0, 100 at 6.64), e.g. for bright greens in Cz. A value
+    past the top is refused and the error names the boost that fits. g and R/G/B are linear on scene-referred
     modules (18 = middle gray, 9 = -1 EV), e.g. denoise only the shadows:
     set_blending("denoiseprofile", {"parametric": {"g_in": {"range": [0, 0, 6, 13]}}}).
     Ranges apply to this module's input, not the render: check with
