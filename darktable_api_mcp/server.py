@@ -57,8 +57,9 @@ Named masks: exposure instances at 0 EV named after the mask (the web
 app's masks tool shows and adjusts them; they change nothing on their own).
 Make masks the user may want to see or adjust named: add_mask,
 add_ai_mask and set_blending take named="background", put the mask there
-and let the module given use it (raster_source); several modules can
-share one.
+and let the module given use it (raster_source; a module before the mask
+in the pipe, e.g. denoiseprofile, shares its drawn shapes instead);
+several modules can share one.
 How large a photo prints: print_size (measured detail, not pixel count).
 Immich (the user's photo server): immich_open(asset id or URL) imports an Immich photo
 to edit; immich_inbox lists the "Edit in darktable" album; after save, immich_send
@@ -1960,12 +1961,36 @@ async def _use_named(ex: int, new: bool, operation: str, instance: int, inverted
         mods = (await _edit(None, "module_list"))["modules"]
         t, h = pos(mods, operation, instance), pos(mods, "exposure", ex)
     if h is None or h > t:
-        raise ToolError(f"the named mask (exposure {ex}) comes after {operation} {instance} in the pipe, "
-                        f"so it can't use it: move_module(\"exposure\", {ex}, before=\"{operation}\", "
-                        f"before_instance={instance}) first")
+        return await _attach_named(ex, operation, instance, inverted)
     return await _edit(None, "blend_set", operation=operation, instance=instance,
                        values={"raster_source": {"operation": "exposure", "instance": ex},
                                "raster_inverted": inverted})
+
+
+async def _attach_named(ex: int, operation: str, instance: int, inverted: bool) -> dict:
+    """For a module before the named mask on exposure `ex` (denoise, lens,
+    retouch...): share the holder's drawn shapes, its whole group, with the
+    module's own mask (mask_attach), so editing them changes both. The
+    holder's parametric ranges don't come along: the module's own apply at
+    its input."""
+    where = (f"the named mask (exposure {ex}) comes after {operation} {instance} in the pipe, "
+             f"so its mask can't be used as a raster mask there")
+    if not await engine.supports("mask_attach"):
+        raise ToolError(f"{where}: move_module(\"exposure\", {ex}, before=\"{operation}\", "
+                        f"before_instance={instance}) first, or use a newer darktable-api build")
+    gid = (await _edit(None, "blend_get", operation="exposure", instance=ex)).get("mask_id")
+    if gid is None:
+        raise ToolError(f"{where}, and it has no drawn shapes to share (only parametric ranges): "
+                        f"set the module's own ranges with set_blending, or move_module(\"exposure\", {ex}, "
+                        f"before=\"{operation}\", before_instance={instance}) if darktable allows it")
+    try:
+        r = await _edit(None, "mask_attach", operation=operation, instance=instance, formid=gid,
+                        combine="union", inverted=inverted)
+    except ToolError as exc:
+        if "already uses" not in str(exc):
+            raise
+        r = {}                              # applied before: nothing to do
+    return {**(r if isinstance(r, dict) else {}), "shared": gid}
 
 
 async def _named_mask(named: str, operation: str | None, instance: int, put, inverted: bool = False) -> dict:
@@ -1983,6 +2008,10 @@ async def _named_mask(named: str, operation: str | None, instance: int, put, inv
     out = {**r, "named": named.strip(), "mask": {"operation": "exposure", "instance": ex}, "new": new}
     if operation:
         out["used_by"] = {"operation": operation, "instance": instance}
+        if isinstance(used, dict) and "shared" in used:
+            out["shared_shapes"] = used["shared"]
+            out["note"] = (f"{operation} {instance} comes before the named mask in the pipe, so it shares the "
+                           "mask's drawn shapes (edit them once, both follow); parametric ranges are its own")
         if isinstance(used, dict) and used.get("history_end") is not None:
             out["history_end"] = used["history_end"]
     return out
