@@ -3627,8 +3627,10 @@ async def immich_inbox(import_new: bool = False) -> dict:
     the user puts Immich photos to edit here. Lists each with its darktable
     photo if already imported; import_new=True imports the others (as
     immich_open, without opening). A photo leaves the inbox once
-    immich_send sends its edit back."""
-    await _require("set_tags.private", "import")
+    immich_send sends its edit back. Every call also keeps the private tag
+    immich|inbox on exactly the inbox's imported photos (tagged/untagged:
+    how many changed), so list_images(tag="immich|inbox") lists them."""
+    await _require("set_tags.private", "import", "images_list.tag")
     from . import immich
     async with _immich() as im:
         box = await _immich_call(im.album_named(immich.INBOX))
@@ -3649,7 +3651,26 @@ async def immich_inbox(import_new: bool = False) -> dict:
                 except ToolError as exc:
                     item["error"] = str(exc)
             photos.append(item)
-    return {"inbox": immich.INBOX, "album_id": box["id"], "photos": photos}
+        sync = await _immich_inbox_tag({p["image_id"] for p in photos if p.get("image_id")})
+    return {"inbox": immich.INBOX, "album_id": box["id"], "photos": photos, **sync}
+
+
+IMMICH_INBOX_TAG = "immich|inbox"
+
+
+async def _immich_inbox_tag(inbox: set[int]) -> dict:
+    """Mirror the inbox album onto the private tag immich|inbox, so the
+    library can filter by it (list_images(tag="immich|inbox"), the web
+    app's inbox): attached to the album's imported photos, detached from
+    photos no longer in it (sent back, or taken out in Immich)."""
+    r = await _call("images_list", tag=IMMICH_INBOX_TAG, rating="all", limit=1000)
+    had = {i["id"] for i in r["images"]}
+    add, drop = sorted(inbox - had), sorted(had - inbox)
+    if add:
+        await _call("set_tags", imgids=add, attach=[IMMICH_INBOX_TAG], private=True)
+    if drop:
+        await _call("set_tags", imgids=drop, detach=[IMMICH_INBOX_TAG])
+    return {"tagged": len(add), "untagged": len(drop)}
 
 
 @mcp.tool()
