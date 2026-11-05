@@ -120,6 +120,9 @@ A shared look rarely fits every frame. For each photo:
   pasted tone mapper can clip a brighter photo's sky; adjust that photo
   (exposure, or the tone mapper's highlight settings).
 - Save each photo you fix.
+- A photo needing more than a quick fix (local edits, its own look):
+  do it in a subagent, one photo at a time (darktable-edit: Keeping it
+  cheap), so its renders stay out of this conversation.
 
 Report the set as a short list: which photos got the look, which needed
 their own fix and what, which you left out and why.

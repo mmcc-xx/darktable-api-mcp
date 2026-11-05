@@ -231,6 +231,12 @@ it, so the number of renders and calls drives the cost.
   same photo at a step boundary once there are about 10 renders, with a
   ready-to-paste prompt for the new conversation (server instructions:
   what it holds).
+- Several photos to edit on your own, each needing its own judgement:
+  edit each in its own subagent, one after another (never in parallel:
+  the engine has one current photo), on this session's model, not a
+  cheaper one. Brief each fully (photo id, the look wanted, what to avoid,
+  this skill) and have it save and return a two-line summary. Each
+  photo's renders then stay out of this conversation.
 
 ## Skipping a step
 

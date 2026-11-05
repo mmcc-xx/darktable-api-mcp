@@ -86,8 +86,9 @@ the edit, default size; zoom for detail). After two failed tries at one
 fix, change the approach or ask; don't push the strength or retry. Hand a
 cheaper agent only edits whose values are already decided (paste_edit,
 styles, batches); looks, local edits and object removal stay here. You
-can't run /clear, so recommend it at the end of a reply, without holding
-up the request: when the user moves to another photo, and on the same
+can't start a new conversation yourself, so recommend one (e.g. /clear in
+Claude Code) at the end of a reply, without holding up the request: when
+the user moves to another photo, and on the same
 photo at a step boundary (a step just approved, nothing half done) once
 the conversation holds about 10 renders. The edit lives in the engine
 (unsaved changes too; offer to save first), so a new conversation loses
