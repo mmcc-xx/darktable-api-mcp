@@ -130,7 +130,7 @@ async def _require(*names: str) -> None:
 # methods that change an edit: the first one on a photo marks compare_before_after's "before"
 _EDIT_METHODS = {"module_set", "module_enable", "preset_apply", "blend_set", "curve_set", "geometry_set",
                  "mask_add", "mask_ai", "mask_remove", "retouch_heal", "retouch_add", "retouch_set",
-                 "retouch_remove", "module_add", "module_remove", "module_move", "module_rename", "ai_fill", "capture_autotune"}
+                 "retouch_scales", "retouch_remove", "module_add", "module_remove", "module_move", "module_rename", "ai_fill", "capture_autotune"}
 _before: dict[int, int] = {}    # photo -> history step before your first edit of it
 
 
@@ -2472,6 +2472,26 @@ async def _photo_circle_to_raw(x: float, y: float, radius: float) -> tuple[list[
     return raw[0], r
 
 
+async def _retouch_shape(spot: dict) -> dict:
+    """A spot's ellipse, path or brush (or a circle with a feather) as the
+    engine's shape in raw space; what isn't given stays the user's spot
+    setting."""
+    shape = spot["shape"]
+    if shape not in ("circle", "ellipse", "path", "brush"):
+        raise ToolError("shape: circle, ellipse, path or brush")
+    if shape in ("circle", "ellipse") and not all(k in spot for k in ("x", "y", "radius")):
+        raise ToolError(f"{shape}: needs x, y and radius")
+    await _require("retouch_add.shape")
+    sh = await _shape_on_raw(shape, spot.get("x"), spot.get("y"), spot.get("radius", 0.01), spot.get("radius_y"),
+                             spot.get("rotation", 0.0), spot.get("feather", 0.0), 0.5, spot.get("points"),
+                             spot.get("width", 0.01), spot.get("hardness", 0.5), spot.get("density", 1.0),
+                             spot.get("corners"))
+    for arg, key in (("feather", "border"), ("width", "width"), ("hardness", "hardness"), ("density", "density")):
+        if arg not in spot:
+            sh.pop(key, None)
+    return sh
+
+
 async def _retouch_spec(spot: dict, adding: bool) -> dict:
     spec: dict[str, Any] = {}
     if "tool" in spot:
@@ -2479,7 +2499,12 @@ async def _retouch_spec(spot: dict, adding: bool) -> dict:
     for k in _RT_OPTIONS:
         if k in spot:
             spec[k] = spot[k]
-    if "x" in spot or "y" in spot or "radius" in spot:
+    if "scale" in spot:
+        await _require("retouch_add.scale")
+        spec["scale"] = spot["scale"]
+    if spot.get("shape") not in (None, "circle") or (spot.get("shape") and "feather" in spot):
+        spec["shape"] = await _retouch_shape(spot)
+    elif "x" in spot or "y" in spot or "radius" in spot:
         if adding or ("x" in spot and "y" in spot and "radius" in spot):
             (spec["x"], spec["y"]), spec["r"] = await _photo_circle_to_raw(spot["x"], spot["y"], spot["radius"])
         else:
@@ -2495,14 +2520,17 @@ async def _retouch_spec(spot: dict, adding: bool) -> dict:
 async def list_retouch_spots() -> dict:
     """The retouch module's spots: formid (for edit_retouch_spot and
     remove_retouch_spots), tool (clone, heal, blur, fill) with its options,
-    and where it is on the photo (on_photo: x, y fractions; source_on_photo
-    for clone and heal)."""
+    type (circle, ellipse, path, brush), wavelet scale, and where it is on
+    the photo (on_photo: x, y fractions, a path's or brush's corners as
+    points_on_photo; source_on_photo for clone and heal). num_scales and
+    merge_from_scale: see retouch_scales."""
     await _require("retouch_list", "coords")
     r = await _edit(None, "retouch_list")
     pts = []
     for s in r["spots"]:
         if "x" in s:
             pts.append([s["x"], s["y"]])
+        pts += [p["corner"] for p in s.get("points", [])]
         if s.get("algorithm") in ("DT_IOP_RETOUCH_CLONE", "DT_IOP_RETOUCH_HEAL"):
             pts.append([s["sx"], s["sy"]])
     img = iter((await _edit(None, "coords", points=pts, **{"from": "raw", "to": "image"}))["points"]
@@ -2510,6 +2538,8 @@ async def list_retouch_spots() -> dict:
     for s in r["spots"]:
         if "x" in s:
             s["on_photo"] = [round(v, 4) for v in next(img)]
+        if "points" in s:
+            s["points_on_photo"] = [[round(v, 4) for v in next(img)] for _ in s.pop("points")]
         if s.get("algorithm") in ("DT_IOP_RETOUCH_CLONE", "DT_IOP_RETOUCH_HEAL"):
             s["source_on_photo"] = [round(v, 4) for v in next(img)]
         s.pop("sx", None)
@@ -2526,7 +2556,15 @@ async def retouch_spots(spots: list[dict]) -> dict:
     the shorter side, e.g. 0.01). tool "heal" (default) or "clone":
     source_x, source_y (required); "blur": blur_radius, blur_type
     ("gaussian", "bilateral"); "fill": fill_mode ("erase", "color"),
-    fill_color [r, g, b], fill_brightness (-1..1). A spot may give
+    fill_color [r, g, b], fill_brightness (-1..1).
+    A long or irregular defect takes "shape" as add_mask draws it: "ellipse"
+    (x, y, radius, radius_y, rotation, feather), "path" (points [[x, y],
+    ...], 3 or more, closed; feather; corners "smooth" or "sharp") or "brush"
+    (points, 2 or more, a stroke; width, half its thickness; hardness,
+    density). Its source_x, source_y is where the ellipse's center, or the
+    first point of the path or brush, copies from. "scale" puts a spot on one
+    wavelet scale (0 the whole image, default the module's current scale;
+    retouch_scales sets them up). A spot may give
     "marker": a name from list_markers instead of x, y: its center (radius
     from the area's size when not given; 0.01 for a point). A spot may give
     "key": any string; a repeat with the same key returns that spot
@@ -2560,18 +2598,51 @@ async def retouch_spots(spots: list[dict]) -> dict:
 async def edit_retouch_spot(formid: int, x: float | None = None, y: float | None = None,
                             radius: float | None = None, source_x: float | None = None,
                             source_y: float | None = None, tool: str | None = None,
-                            options: dict[str, Any] | None = None) -> dict:
+                            options: dict[str, Any] | None = None, points: list[list[float]] | None = None,
+                            scale: int | None = None) -> dict:
     """Move, resize or change one retouch spot (formid from
     list_retouch_spots). x, y and radius go together (on the photo as shown,
-    as retouch_spots); source_x/source_y move a clone or heal source. tool
-    swaps clone and heal, or blur and fill (the darkroom allows the same).
-    options: blur_radius, blur_type, fill_mode, fill_color, fill_brightness."""
+    as retouch_spots); an ellipse takes radius_y and rotation in options too,
+    a path or brush a whole new points list: the shape replaces the old one
+    and its type stays. source_x/source_y move a clone or heal source, which
+    otherwise stays where it is. tool swaps clone and heal, or blur and fill
+    (the darkroom allows the same). scale moves the spot to another wavelet
+    scale. options: blur_radius, blur_type, fill_mode, fill_color,
+    fill_brightness; for shapes feather, width, hardness, density, corners."""
     await _require("retouch_set", "coords")
     spot: dict[str, Any] = {k: v for k, v in (("x", x), ("y", y), ("radius", radius), ("source_x", source_x),
-                                               ("source_y", source_y), ("tool", tool)) if v is not None}
+                                               ("source_y", source_y), ("tool", tool), ("points", points),
+                                               ("scale", scale)) if v is not None}
     spot.update(options or {})
+    if scale is not None:
+        await _require("retouch_set.scale")
+    if any(k in spot for k in ("x", "y", "radius", "points", "feather", "width", "hardness", "density",
+                               "radius_y", "rotation", "corners")):
+        listed = [s for s in (await _edit(None, "retouch_list"))["spots"] if s["formid"] == formid]
+        if listed and (listed[0]["type"] != "circle" or "feather" in spot):
+            await _require("retouch_set.shape")
+            spot["shape"] = listed[0]["type"]
     spec = await _retouch_spec(spot, adding=False)
     return await _edit(None, "retouch_set", formid=formid, **spec)
+
+
+@mcp.tool()
+async def retouch_scales(num_scales: int | None = None, merge_from_scale: int | None = None,
+                         scale: int | None = None) -> dict:
+    """Retouch's wavelet decomposition, as its scale bar in the darkroom. It
+    splits the photo into detail scales, fine to coarse, and a residual that
+    holds the tones, so a spot on one scale changes that size of detail only:
+    a skin blemish's or a sky band's tone on a coarse scale keeps the fine
+    texture over it; a scratch on a fine scale keeps the tone under it.
+    num_scales: 0 (off) to 15, each scale twice the size of the one before;
+    scale num_scales + 1 is the residual. merge_from_scale: from this scale
+    up a spot works on its own scale's detail merged with that of the scales
+    from merge_from_scale to it (0 off). scale: the one new spots go on. Fewer scales leave spots past
+    the residual undrawn (unused_spots counts them). Returns the settings."""
+    await _require("retouch_scales")
+    args = {k: v for k, v in (("num_scales", num_scales), ("merge_from_scale", merge_from_scale),
+                              ("curr_scale", scale)) if v is not None}
+    return await _edit(None, "retouch_scales", **args)
 
 
 @mcp.tool()

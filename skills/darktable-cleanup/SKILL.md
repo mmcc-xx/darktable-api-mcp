@@ -101,9 +101,16 @@ shorter side (0.005–0.01 for a speck, 0.02–0.04 for a dust blob).
   texture, no copied edge. Fix with `edit_retouch_spot(formid, ...)` (move
   the source, resize), or `remove_retouch_spots`. `list_retouch_spots`
   shows what's there, with formids.
-- Long or large objects (power lines, people): several overlapping
-  circles, or ask the user; this is slow work with circles and may look
-  worse than leaving it.
+- Long or irregular objects (a wire, a crack, a hair): one spot with
+  `shape: "brush"` along it (`points`, `width`) or `shape: "path"` around
+  it, and `source_x, source_y` for where the first point copies from.
+  Ellipses suit oval blemishes. Large objects (people): `ai_fill`, or ask
+  the user.
+- **Wavelet scales** keep texture or tone that a plain clone would take:
+  `retouch_scales(num_scales=5)`, then give spots a `scale`. A coarse
+  scale (4-5) evens out a blotch or a tone band and leaves the skin or
+  grain on it; a fine scale (1-2) removes a scratch and leaves the tone
+  under it. Scale 0 is the whole image, the default.
 
 ### Removing objects: AI fill
 
