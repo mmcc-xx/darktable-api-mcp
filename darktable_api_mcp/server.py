@@ -766,12 +766,19 @@ async def auto_capture_sharpen() -> dict:
 
 
 @mcp.tool()
-async def add_module_instance(operation: str, instance: int = 0, copy: bool = False) -> dict:
+async def add_module_instance(operation: str, instance: int = 0, copy: bool = False,
+                              key: str | None = None) -> dict:
     """Add another instance of a module after the given one, as its "new
     instance" (copy=False: defaults) or "duplicate" (copy=True: its
     settings and blending) does, as one history step. Returns the new
-    instance number (instance=... in other tools)."""
+    instance number (instance=... in other tools). key: optional; it
+    becomes the instance's name, and a repeat with the same key returns
+    that instance ("created": false) instead of adding another, so
+    retrying is safe."""
     await _require("module_add")
+    if key is not None:
+        await _require("module_add.key")
+        return await _edit(None, "module_add", operation=operation, instance=instance, copy=copy, key=key)
     return await _edit(None, "module_add", operation=operation, instance=instance, copy=copy)
 
 
@@ -819,18 +826,25 @@ async def set_curve(operation: str, points: list[list[float]], channel: str | No
 
 
 @mcp.tool()
-async def duplicate_photo(image_id: int | None = None, virgin: bool = False, save_first: bool = False) -> dict:
+async def duplicate_photo(image_id: int | None = None, virgin: bool = False, save_first: bool = False,
+                          key: str | None = None) -> dict:
     """Make a duplicate (a virtual copy of the same raw), as darktable's
     lighttable does: with its saved edit, or virgin=True unedited. Unsaved
     changes: save_first=True saves them first (ask the user). Returns the
-    new photo's library entry."""
+    new photo's library entry. key: optional; it becomes the duplicate's
+    version name, and a repeat with the same key returns that duplicate
+    ("created": false) instead of making another."""
     await _require("image_duplicate")
+    extra = {}
+    if key is not None:
+        await _require("image_duplicate.key")
+        extra["key"] = key
     if image_id is None:
         image_id = engine.image_id
     if image_id is None:
         raise ToolError("give image_id, or open a photo first")
     try:
-        return await engine.call("image_duplicate", imgid=image_id, virgin=virgin, save=save_first)
+        return await engine.call("image_duplicate", imgid=image_id, virgin=virgin, save=save_first, **extra)
     except EngineError as exc:
         if exc.is_("unsaved_changes", "unsaved"):
             raise ToolError("the photo has unsaved changes and the duplicate gets the saved edit: save, or "
@@ -2141,7 +2155,8 @@ async def add_mask(operation: str, shape: str, x: float | None = None, y: float 
                    feather: float = 0.05, compression: float = 0.5, points: list[list[float]] | None = None,
                    width: float = 0.03, hardness: float = 0.5, density: float = 1.0,
                    combine: str = "union", inverted: bool = False, instance: int = 0,
-                   marker: str | None = None, corners: str | None = None, named: str | None = None) -> dict:
+                   marker: str | None = None, corners: str | None = None, named: str | None = None,
+                   key: str | None = None) -> dict:
     """Draw a mask shape on a module so it acts only there (one history
     step). x, y: fractions 0-1 of the photo as shown; radius, feather:
     fractions of its shorter side. marker: a name from list_markers instead
@@ -2160,8 +2175,15 @@ async def add_mask(operation: str, shape: str, x: float | None = None, y: float 
     exposure instance at 0 EV with that name, made if there is none; the
     web app's masks tool shows and adjusts it) and let operation/instance
     use it as its raster mask (operation="" only makes the mask). Prefer
-    it for masks the user may want to see or adjust, or to reuse."""
+    it for masks the user may want to see or adjust, or to reuse.
+    key: optional; it becomes the shape's name, and a repeat with the
+    same key on the same module returns that shape ("created": false)
+    instead of drawing another, so retrying is safe."""
     await _require("mask_add", "coords")
+    extra = {}
+    if key is not None:
+        await _require("mask_add.key")
+        extra["key"] = key
     if marker:
         shape, x, y, points, mcorners = await _marker_shape(marker)
         corners = corners or await _marker_corners(mcorners)
@@ -2171,23 +2193,28 @@ async def add_mask(operation: str, shape: str, x: float | None = None, y: float 
         await _require("module_add", "module_rename", "module_move")
         return await _named_mask(named, operation or None, instance,
                                  lambda ex: _edit(None, "mask_add", operation="exposure", instance=ex, shape=sh,
-                                                  combine=combine, inverted=inverted))
+                                                  combine=combine, inverted=inverted, **extra))
     return await _edit(None, "mask_add", operation=operation, instance=instance, shape=sh,
-                       combine=combine, inverted=inverted)
+                       combine=combine, inverted=inverted, **extra)
 
 
 @mcp.tool()
 async def add_ai_mask(operation: str, include: list[list[float]], exclude: list[list[float]] | None = None,
                       combine: str = "union", inverted: bool = False, instance: int = 0,
-                      named: str | None = None) -> dict:
+                      named: str | None = None, key: str | None = None) -> dict:
     """Mask a module to an object with darktable's AI object mask (SAM),
     as one history step: include points [[x, y], ...] on it (fractions of
     the photo as shown; one is enough), exclude points beside it; its
     outline becomes path shapes. combine/inverted as add_mask. The first
     call on a photo takes a few seconds. Returns formid (for remove_mask),
     paths and area. Needs darktable with AI enabled. named="sky": on the
-    named mask "sky" instead, used by operation/instance, as add_mask."""
+    named mask "sky" instead, used by operation/instance, as add_mask.
+    key: as add_mask (a repeat doesn't run the model again)."""
     await _require("mask_ai")
+    extra = {}
+    if key is not None:
+        await _require("mask_ai.key")
+        extra["key"] = key
     if await engine.supports("mask_ai_encode"):
         # the slow first step (encoding the photo) in the background
         enc = await _run_job(lambda: _edit(None, "mask_ai_encode"), True, 600)
@@ -2199,10 +2226,10 @@ async def add_ai_mask(operation: str, include: list[list[float]], exclude: list[
         await _require("module_add", "module_rename", "module_move")
         r = await _named_mask(named, operation or None, instance,
                               lambda ex: _edit(None, "mask_ai", operation="exposure", instance=ex, points=points,
-                                               combine=combine, inverted=inverted))
+                                               combine=combine, inverted=inverted, **extra))
     else:
         r = await _edit(None, "mask_ai", operation=operation, instance=instance, points=points,
-                        combine=combine, inverted=inverted)
+                        combine=combine, inverted=inverted, **extra)
     if r.get("area", 0) > 0.8:
         r["hint"] = ("the mask covers most of the photo: if that isn't the object, remove it "
                      "(remove_mask) and try again with exclude points around the object")
@@ -2501,10 +2528,14 @@ async def retouch_spots(spots: list[dict]) -> dict:
     ("gaussian", "bilateral"); "fill": fill_mode ("erase", "color"),
     fill_color [r, g, b], fill_brightness (-1..1). A spot may give
     "marker": a name from list_markers instead of x, y: its center (radius
-    from the area's size when not given; 0.01 for a point). Returns the
+    from the area's size when not given; 0.01 for a point). A spot may give
+    "key": any string; a repeat with the same key returns that spot
+    (its "created" entry false) instead of adding another. Returns the
     formids."""
     await _require("retouch_add", "coords")
     spots = [dict(sp) for sp in spots]
+    if any("key" in sp for sp in spots):
+        await _require("retouch_add.key")
     for sp in spots:
         if sp.get("marker"):
             m = await _marker(sp.pop("marker"))
@@ -2519,6 +2550,9 @@ async def retouch_spots(spots: list[dict]) -> dict:
                                              (b["bottom"] - b["top"]) * g["height"]) / 2
                                          / min(g["width"], g["height"]), 5)
     specs = [await _retouch_spec(s, adding=True) for s in spots]
+    for sp, spec in zip(spots, specs):
+        if "key" in sp:
+            spec["key"] = sp["key"]
     return await _edit(None, "retouch_add", spots=specs)
 
 
