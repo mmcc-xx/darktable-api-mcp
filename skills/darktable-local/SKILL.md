@@ -110,7 +110,11 @@ high full, high end] per channel, in the darkroom's units (percent for
 brightness `g`). On a scene-referred module `g` is linear: 18 is middle
 gray and each EV down halves it (9 = -1 EV, 2 = -3 EV), so dark tones are
 a few percent. The values are what reaches the module, not what
-measure_photo reads from the render. Examples on a scene-referred module:
+measure_photo reads from the render: to read them, give measure_photo
+`blend_of={"operation": ..., "instance": ...}` on a point or box of what
+the mask should catch (and one it should leave out) and set the range
+around the `in` values it returns (`boost_needed` when a value is past the
+channel's `top`). Examples on a scene-referred module:
 - shadows only: `{"g_in": {"range": [0, 0, 6, 13]}}`
 - the darkest tones only (gaps, deep shadow): `{"g_in": {"range": [0, 0, 2, 6]}}`
 - highlights only: `{"g_in": {"range": [40, 70, 100, 100]}}`

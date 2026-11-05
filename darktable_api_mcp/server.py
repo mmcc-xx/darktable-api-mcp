@@ -1308,7 +1308,7 @@ async def measure_photo(points: list[list[float]] | None = None, boxes: list[dic
                         radius: int = 2, size: int = 1024, zoom: float | None = None,
                         center_x: float = 0.5, center_y: float = 0.5, bins: int = 32,
                         history_step: int | None = None, channels: bool = False,
-                        markers: list[str] | None = None) -> dict:
+                        markers: list[str] | None = None, blend_of: dict | None = None) -> dict:
     """Read the open photo as darktable renders it (display sRGB, as the
     darkroom shows it). points [[x, y], ...] and boxes [{left, top, right,
     bottom}], fractions of the photo: rgb (0-1), lab, luminance min/max
@@ -1318,8 +1318,22 @@ async def measure_photo(points: list[list[float]] | None = None, boxes: list[dic
     highlights and shadows. markers: names from list_markers (a point
     reads as a point, an area as its box; the results follow points and
     boxes). size, zoom, center_x, center_y, history_step as
-    render_preview."""
+    render_preview.
+    blend_of={"operation": "exposure", "instance": 1}: each point and box
+    also gets "blend", that module's input ("in") and output ("out",
+    before its blending) in its own parametric channels (g, R, G, B, Jz,
+    Cz, hz, or L, a, b, C, h, as get_blending lists them), each {mean,
+    min, max} in set_blending's units, plus "top" (the channel's maximum
+    at its current boost) and "boost_needed" when max is past it. Set a
+    parametric range from this instead of test renders: e.g. Cz mean 0.4
+    → set_blending parametric {"Cz_in": {"range": [0.3, 0.35, 0.45, 0.5]}}.
+    Slower (two extra renders per point or box); switches the module on
+    for the reading only."""
     await _require("sample")
+    if blend_of is not None:
+        await _require("sample.blend_of")
+        if not isinstance(blend_of, dict) or "operation" not in blend_of:
+            raise ToolError('blend_of is {"operation": "exposure", "instance": 0}')
     if engine.image_id is None:
         raise ToolError("no photo is open: call open_photo(image_id) first")
     points, boxes = list(points or []), list(boxes or [])
@@ -1337,6 +1351,8 @@ async def measure_photo(points: list[list[float]] | None = None, boxes: list[dic
     if history_step is not None:
         await _require("render.history_end")
         params["history_end"] = max(0, history_step)
+    if blend_of is not None:
+        params["blend_of"] = {"operation": blend_of["operation"], "instance": int(blend_of.get("instance", 0))}
     r = await _edit(None, "sample", **params)
     r.pop("process_ms", None)
     hist = r.get("histogram") or {}
