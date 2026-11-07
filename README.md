@@ -231,7 +231,7 @@ a server over SSH, with the web app reached through an SSH tunnel
 | `get_curve`, `set_curve` | curves of rgbcurve, tonecurve, colorzones, basecurve |
 | `duplicate_photo`, `remove_photos` | a duplicate (version) of a photo, with its edit or virgin; remove photos from the library as the lighttable's remove does (the files stay; asks for `confirm`) |
 | `compress_history` | compress (or truncate) the history as darktable's history panel does; saves first |
-| `get_geometry`, `rotate_photo`, `crop_photo` | orientation, straightening (with the automatic crop) and crop, through darktable's flip, rotate and perspective, and crop modules |
+| `get_geometry`, `rotate_photo`, `fit_perspective`, `crop_photo` | orientation, straightening (with the automatic crop), perspective fitted from lines along edges, and crop, through darktable's flip, rotate and perspective, and crop modules |
 | `export_photo` | darktable's export of the saved edit to a file (format, size, quality, output pattern, style; the user's export settings otherwise) |
 | `get_blending`, `set_blending` | a module's blending: blend mode, opacity, parametric ranges per channel in the darkroom's units (e.g. denoise only the shadows) |
 | `add_ai_mask` | darktable's AI object mask: points on a subject, outlined into path shapes on a module (needs darktable built with AI, AI enabled) |

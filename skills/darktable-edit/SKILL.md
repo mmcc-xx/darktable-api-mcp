@@ -157,7 +157,9 @@ contrast. Use it for sky vs. foreground, backlit faces, deep shadows.
 
 - **Crop and straighten**: `get_geometry`, `rotate_photo`, `crop_photo`;
   `render_preview(uncropped=True)` to choose. Crop before judging
-  exposure and tones if it removes a bright or dark edge.
+  exposure and tones if it removes a bright or dark edge. Converging
+  verticals (buildings): `fit_perspective` with lines along two edges
+  that should be vertical, before cropping.
 - **Lens correction** (`lens`): usually auto-applied; check it's on if
   the lens is known. Don't combine its TCA correction with raw chromatic
   aberrations.

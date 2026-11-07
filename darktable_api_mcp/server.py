@@ -953,6 +953,43 @@ async def rotate_photo(degrees: int = 0, angle: float | None = None, mirror: str
 
 
 @mcp.tool(structured_output=False)
+async def fit_perspective(lines: list[list[float]] | None = None, quad: list[list[float]] | None = None,
+                          fit: str = "auto", rotation: bool = True, lens_shift: bool = True,
+                          shear: bool = False, uncropped: bool = False,
+                          preview: bool | dict = False, measure: dict | None = None) -> dict | list:
+    """Straighten converging lines (a building leaning back, a tilted
+    horizon) from lines you place along edges that should be vertical or
+    horizontal, as darktable's rotate and perspective module does with
+    drawn lines and its fit buttons: it fits rotation and lens shift, then
+    its automatic crop.
+    lines: segments [x1, y1, x2, y2] as fractions of the photo as shown
+    (0..1, as render_preview shows it; uncropped=True: of
+    render_preview(uncropped=True)), e.g. the two sides of a building:
+    [[0.30, 0.15, 0.34, 0.85], [0.72, 0.15, 0.66, 0.85]]. Each counts as
+    vertical or horizontal by its larger extent; put them on real edges,
+    as long as they go, ideally far apart. quad: instead of lines, four
+    corners [[x, y], ...] in order around a shape that should be a
+    rectangle (a window, a facade); its sides are the lines.
+    fit: "vertical", "horizontal", "both" or "auto" (each direction with
+    2 or more lines); 2 lines at least per direction straightened.
+    rotation=False fits lens shift only; lens_shift=False rotation only;
+    shear=True (with "both") also fits shear.
+    Returns the geometry, the fitted values and the ones before. Not saved
+    until save. preview, measure as set_module: look at the result, a full
+    correction of a strong tilt can look stretched."""
+    await _require("perspective_fit")
+    if (lines is None) == (quad is None):
+        raise ToolError("give lines or quad (not both)")
+    params: dict[str, Any] = {"fit": fit, "rotation": rotation, "lens_shift": lens_shift,
+                              "shear": shear, "space": "uncropped" if uncropped else "image"}
+    if lines is not None:
+        params["lines"] = lines
+    else:
+        params["quad"] = quad
+    return await _and_look(await _edit(None, "perspective_fit", **params), preview, measure)
+
+
+@mcp.tool(structured_output=False)
 async def crop_photo(left: float | None = None, top: float | None = None, right: float | None = None,
                      bottom: float | None = None, aspect: str | None = None, remove: bool = False,
                      preview: bool | dict = False, measure: dict | None = None) -> dict | list:
