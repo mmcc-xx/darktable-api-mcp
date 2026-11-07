@@ -130,6 +130,8 @@ contrast. Use it for sky vs. foreground, backlit faces, deep shadows.
   `midtones` −3, `highlights` −2, `whites` −1, `speculars` 0 EV. Values
   are EV (±2). Move neighbouring bands together, in small steps
   (0.3–1 EV), or you get halos.
+  `tone_band(point=...)` says which band a spot is in, from the
+  module's own mask.
 - The mask must spread over the bands. Window: run the wands,
   `use_picker("toneequal", "mask exposure compensation")` then
   `"mask contrast compensation"`. Headless: set `exposure_boost` /

@@ -4149,6 +4149,27 @@ async def list_pickers(operation: str, instance: int = 0) -> dict:
 
 
 @mcp.tool()
+async def tone_band(point: list[float] | None = None, marker: str | None = None, instance: int = 0) -> dict:
+    """Which tone equalizer band a spot of the photo is in, from the
+    module's own luminance mask (what its bands act on, not the preview's
+    brightness; the module need not be on). Before moving a band for a
+    face, a sky or a shadow: returns ev (the mask there, usually -8..0) and
+    band, the nearest band's set_module name.
+    point [x, y], fractions of the photo as shown, or marker: a name from
+    list_markers (an area gives its center). Changes nothing. Example:
+    tone_band(point=[0.4, 0.3]) -> {"ev": -4.2, "band": "shadows"}, then
+    set_module("toneequal", {"shadows": 0.5}). Headless engine only."""
+    await _require("toneequal_mask")
+    if marker:
+        m = await _marker(marker)
+        b = m.get("box")
+        point = m["points"][0] if m["kind"] == "point" else [(b["left"] + b["right"]) / 2, (b["top"] + b["bottom"]) / 2]
+    if point is None:
+        raise ToolError("tone_band needs a point or a marker")
+    return await _edit(None, "toneequal_mask", point=point, instance=instance)
+
+
+@mcp.tool()
 async def use_picker(operation: str, control: str, box: dict | None = None, point: list[float] | None = None,
                      instance: int = 0, wait: bool = True, timeout_s: float = 60,
                      marker: str | None = None) -> dict:
