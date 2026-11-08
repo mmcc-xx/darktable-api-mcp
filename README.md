@@ -141,6 +141,7 @@ Set it in the shell you run the steps below in:
        python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
        DTAPI_BIN=$HOME/src/darktable/build/bin/darktable-api \
        DTAPI_CONFIGDIR=$HOME/src/darktable-api-mcp/library-copy/config \
+       DTAPI_MCP=$HOME/src/darktable-api-mcp/.venv/bin/darktable-api-mcp \
            .venv/bin/uvicorn dtweb.main:app --port 8020 --timeout-graceful-shutdown 3
 
    Open http://127.0.0.1:8020
