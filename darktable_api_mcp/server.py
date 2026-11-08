@@ -129,7 +129,7 @@ async def _require(*names: str) -> None:
 
 # methods that change an edit: the first one on a photo marks compare_before_after's "before"
 _EDIT_METHODS = {"module_set", "module_enable", "preset_apply", "blend_set", "curve_set", "geometry_set",
-                 "mask_add", "mask_ai", "mask_remove", "retouch_heal", "retouch_add", "retouch_set",
+                 "mask_add", "mask_ai", "mask_remove", "mask_set", "retouch_heal", "retouch_add", "retouch_set",
                  "retouch_scales", "retouch_remove", "module_add", "module_remove", "module_move", "module_rename", "ai_fill", "capture_autotune"}
 _before: dict[int, int] = {}    # photo -> history step before your first edit of it
 
@@ -2330,6 +2330,142 @@ async def remove_mask(operation: str, formid: int, instance: int = 0) -> dict:
     history step."""
     await _require("mask_remove")
     return await _edit(None, "mask_remove", operation=operation, formid=formid, instance=instance)
+
+
+@mcp.tool()
+async def edit_mask(operation: str, formid: int, x: float | None = None, y: float | None = None,
+                    move: list[float] | None = None, radius: float | None = None,
+                    radius_y: float | None = None, rotation: float | None = None,
+                    feather: float | None = None, compression: float | None = None,
+                    points: list[list[float]] | None = None, corners: str | None = None,
+                    width: float | None = None, hardness: float | None = None, density: float | None = None,
+                    opacity: float | None = None, inverted: bool | None = None, instance: int = 0) -> dict:
+    """Change one drawn shape of a module's mask in place (formid from
+    list_masks), as dragging it or its handles in the darkroom: only what
+    you give changes, the shape keeps its formid, so every module sharing
+    it follows. One history step. Units as add_mask: x, y fractions 0-1
+    of the photo as shown (the new center of a circle, ellipse or
+    gradient); move [dx, dy]: shift the whole shape by that much (any
+    type); radius, radius_y, feather: fractions of the shorter side;
+    rotation in degrees. Circle: x, y, radius, feather. Ellipse: also
+    radius_y, rotation. Gradient: x, y, rotation, compression. Path: new
+    points [[x, y], ...] (3 or more; corners "smooth" or "sharp"), or
+    feather alone for the whole outline. Brush: points (2 or more), width,
+    hardness, density. Any shape: opacity 0-1 and inverted (its place in
+    the module's mask). A shape inside a group (an AI mask's paths): move,
+    points, feather, width, hardness, density, opacity, inverted. The type
+    can't change: remove_mask and add_mask for that.
+    Example: edit_mask("exposure", 1794100005, radius=0.2) makes a circle
+    larger around the same center."""
+    await _require("mask_set", "coords")
+    lst = await list_masks(operation, instance)
+
+    def find(shapes: list[dict]) -> dict | None:
+        for s_ in shapes:
+            if s_.get("formid") == formid:
+                return s_
+            f = find(s_.get("members") or [])
+            if f:
+                return f
+        return None
+
+    s = find(lst.get("shapes", []))
+    if s is None:
+        raise ToolError(f"{operation} has no shape {formid} on its mask (list_masks)")
+    t = s["type"]
+    if move is not None and (len(move) != 2 or x is not None or y is not None or points is not None):
+        raise ToolError("move: [dx, dy], instead of x, y or points")
+    sh: dict[str, Any] = {}
+    if t in ("circle", "ellipse", "gradient"):
+        geo = {"x": x, "y": y, "move": move, "radius": radius, "radius_y": radius_y, "rotation": rotation,
+               "feather": feather, "compression": compression}
+        given = [k for k, v in geo.items() if v is not None]
+        wrong = [k for k, v in (("points", points), ("width", width), ("hardness", hardness),
+                                ("density", density)) if v is not None]
+        if wrong:
+            raise ToolError(f"a {t} takes no {', '.join(wrong)}")
+        if given and "on_photo" not in s:
+            raise ToolError(f"shape {formid} is a {t} inside a group: only opacity and inverted change here")
+        if given:
+            cx, cy = s["on_photo"]
+            if move is not None:
+                x, y = cx + move[0], cy + move[1]
+            nx, ny = (cx if x is None else x), (cy if y is None else y)
+            if not (0.0 <= nx <= 1.0 and 0.0 <= ny <= 1.0):
+                raise ToolError(f"the new center ({nx:.3f}, {ny:.3f}) is off the photo (0-1)")
+            new = await _shape_on_raw(t, nx, ny, s.get("radius", 0.1) if radius is None else radius,
+                                      s.get("radius_y") if radius_y is None else radius_y,
+                                      (s.get("rotation", 0.0) if t == "ellipse" else 0.0) if rotation is None
+                                      else rotation, s.get("feather", 0.0) if feather is None else feather,
+                                      0.5 if compression is None else compression, None, 0, 0, 0)
+            keys = {"x": ["x", "y"], "y": ["x", "y"], "move": ["x", "y"], "radius": ["r", "ra"],
+                    "radius_y": ["rb"], "rotation": ["rotation"], "feather": ["border"],
+                    "compression": ["compression"]}
+            for k in given:
+                for kk in keys[k]:
+                    if kk in new:
+                        sh[kk] = new[kk]
+    else:
+        brush = t == "brush"
+        wrong = [k for k, v in (("x", x), ("y", y), ("radius", radius), ("radius_y", radius_y),
+                                ("rotation", rotation), ("compression", compression)) if v is not None]
+        if brush and feather is not None:
+            wrong.append("feather (a brush has width)")
+        if not brush and any(v is not None for v in (width, hardness, density)):
+            wrong.append("width, hardness, density (brushes only)")
+        if wrong:
+            raise ToolError(f"a {t} takes no {', '.join(wrong)}")
+        cur = s.get("points") or []
+        if points is not None:
+            if len(points) < (2 if brush else 3):
+                raise ToolError("path: 3 or more points; brush: 2 or more")
+            if corners not in (None, "smooth", "sharp"):
+                raise ToolError('corners: "smooth" or "sharp"')
+            pts = [[min(max(p[0], 0.0), 1.0), min(max(p[1], 0.0), 1.0)] for p in points]
+            sh["points"], _, _ = await _photo_to_raw(pts)
+            if corners == "sharp":
+                await _require("mask_add.corners")
+                sh["corners"] = "sharp"
+            # new points keep the shape's feather unless one is given
+            if cur and feather is None and width is None:
+                sh["width" if brush else "border"] = cur[0]["border"][0]
+        elif move is not None and cur:
+            # every corner and control point shifted on the photo, then back
+            flat = [q for p in cur for q in (p["corner"], p["ctrl1"], p["ctrl2"])]
+            img = (await _edit(None, "coords", points=flat, **{"from": "raw", "to": "image"}))["points"]
+            raw, _, _ = await _photo_to_raw([[q[0] + move[0], q[1] + move[1]] for q in img])
+            sh["points"] = [{**p, "corner": raw[3 * i], "ctrl1": raw[3 * i + 1], "ctrl2": raw[3 * i + 2]}
+                            for i, p in enumerate(cur)]
+        size = feather if not brush else width
+        if size is not None:
+            first = sh["points"][0] if "points" in sh and isinstance(sh["points"][0], list) else None
+            if first is None:
+                first = (await _edit(None, "coords", points=[cur[0]["corner"]],
+                                     **{"from": "raw", "to": "image"}))["points"][0] if cur else [0.5, 0.5]
+                fx, fy = first
+            else:
+                fx, fy = pts[0]
+            _, sz = await _photo_circle_to_raw(fx, fy, size)
+            if "points" in sh and isinstance(sh["points"][0], dict):
+                for p in sh["points"]:
+                    p["border"] = [sz, sz]
+            else:
+                sh["width" if brush else "border"] = sz
+        if brush and hardness is not None:
+            sh["hardness"] = hardness
+        if brush and density is not None:
+            sh["density"] = density
+    extra: dict[str, Any] = {}
+    if opacity is not None:
+        extra["opacity"] = min(max(opacity, 0.0), 1.0)
+    if inverted is not None:
+        extra["inverted"] = inverted
+    if not sh and not extra:
+        raise ToolError("nothing to change: give x, y, move, radius, feather, points, ... or opacity, inverted")
+    if sh:
+        sh["type"] = t
+        extra["shape"] = sh
+    return await _edit(None, "mask_set", operation=operation, instance=instance, formid=formid, **extra)
 
 
 # where ai_fill writes its patch TIFFs: beside the photo by default; set

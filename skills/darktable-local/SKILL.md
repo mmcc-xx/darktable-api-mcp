@@ -148,7 +148,7 @@ keeps only where both apply.
    changes, outside not at all.
    After a masked edit, `change_map(mask={"operation": op, "instance": n})`
    compares the change inside the mask with outside (dE, leak).
-4. Fix the shape (`list_masks`, `remove_mask`, add again with new numbers),
+4. Fix the shape (`list_masks`, then `edit_mask` to move, resize or feather it in place),
    then set the real value.
 
 ## Softening edges
