@@ -72,7 +72,7 @@ your changes show up live, and save saves the whole edit. The web app's photo
 (library_status: web_imgid, the photo its tabs last opened; open_darkroom_photo
 takes it) is usually "this photo": a photo id the user gives wins, and say which photo you
 took ("photo 613, last opened in the web app; 610 also open"). While the library is released (the user opens it in darktable
-itself), only library_status, acquire_library and takeover_library work. Tell
+itself), only library_status and acquire_library work. Tell
 the user what you are doing. Do what the user asked the way they asked:
 if you think another way is better (another mask, tool, module or order),
 say why and ask before doing it.
@@ -4397,19 +4397,6 @@ async def acquire_library() -> dict:
     state "owned" again)."""
     try:
         return await engine.library("library_acquire")
-    except EngineError as exc:
-        raise _err(exc)
-
-
-@mcp.tool()
-async def takeover_library(confirm: bool = False) -> dict:
-    """Ask the darktable GUI that has the library open to quit the normal way
-    (it saves its edits), wait, then take the library back. Never kills it.
-    This closes the user's darktable window: ask first; pass confirm=True."""
-    if not confirm:
-        raise ToolError("takeover quits the user's darktable: ask, then pass confirm=True")
-    try:
-        return await engine.takeover()
     except EngineError as exc:
         raise _err(exc)
 

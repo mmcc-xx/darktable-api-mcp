@@ -24,8 +24,6 @@ Configuration (environment variables):
   DTAPI_SOCKET       the engine's socket (default: next to the config dir)
   DTAPI_MAX_SESSIONS images the engine keeps open at once (default 3)
   DTAPI_IDLE_EXIT    seconds the engine stays up with no client (default 600)
-  DTAPI_GUI_BIN      the darktable GUI a takeover may quit (default:
-                     "darktable" next to DTAPI_BIN, the same source tree)
 """
 
 from __future__ import annotations
@@ -37,7 +35,6 @@ import json
 import os
 import shutil
 import subprocess
-import sys
 import tempfile
 import time
 from pathlib import Path
@@ -46,13 +43,11 @@ from typing import Callable
 BIN = Path(os.environ.get("DTAPI_BIN") or shutil.which("darktable-api") or "darktable-api")
 CONFIG = Path(os.environ.get("DTAPI_CONFIGDIR") or "DTAPI_CONFIGDIR-not-set").expanduser().resolve()
 CACHE = Path(os.environ.get("DTAPI_CACHEDIR", CONFIG.parent / "cache")).expanduser().resolve()
-GUI_BIN = Path(os.environ.get("DTAPI_GUI_BIN") or BIN.parent / "darktable")
 LOG = CONFIG.parent / "engine.log"
 MAX_SESSIONS = int(os.environ.get("DTAPI_MAX_SESSIONS", "3"))
 IDLE_EXIT_S = int(os.environ.get("DTAPI_IDLE_EXIT", "600"))
 CALL_TIMEOUT_S = 120
 START_TIMEOUT_S = 60
-QUIT_TIMEOUT_S = 60
 
 
 def _socket_path() -> Path:
@@ -362,65 +357,6 @@ class Engine:
         """library_status / library_release / library_acquire."""
         async with self._lock:
             return await self._call(method, **params)
-
-    async def takeover(self) -> dict:
-        """Quit the darktable GUI holding the library the normal way (as its
-        quit menu item: it saves its edits), wait for it to exit, then take
-        the library back. Never kills it: if it doesn't quit (a dialog open,
-        a job running), report that and leave it running."""
-        st = await self.library("library_status")
-        if st.get("state") != "released":
-            raise EngineError("the engine already has the library")
-        pid = st.get("holder_pid") or 0
-        if pid:
-            exe = (await _run("ps", "-o", "comm=", "-p", str(pid))).strip()
-            if not exe or Path(exe).resolve() != GUI_BIN.resolve():
-                raise EngineError(f"the library is held by {exe or 'process ' + str(pid)}, not by "
-                                  f"{GUI_BIN} (DTAPI_GUI_BIN); not quitting it")
-            asked = await _ask_to_quit(pid)
-            t = time.time()
-            while _alive(pid) and time.time() - t < QUIT_TIMEOUT_S:
-                await asyncio.sleep(0.5)
-            if _alive(pid):
-                raise EngineError(f"darktable (process {pid}) didn't quit within {QUIT_TIMEOUT_S} s "
-                                  f"({asked}); a dialog may be open there. It was left running.")
-        r = await self.library("library_acquire")
-        r["quit_pid"] = pid
-        return r
-
-
-async def _ask_to_quit(pid: int) -> str:
-    """darktable's own quit path: on macOS the application terminate request
-    (as Cmd+Q), elsewhere its D-Bus Quit method (src/common/dbus.c)."""
-    if sys.platform == "darwin":
-        out = await _run("osascript", "-l", "JavaScript", "-e",
-                         'ObjC.import("AppKit");var a=$.NSRunningApplication.'
-                         f'runningApplicationWithProcessIdentifier({pid});'
-                         'a.isNil()?"not an application":"asked: "+String(a.terminate)')
-        return out.strip()
-    out = await _run("gdbus", "call", "--session", "--dest", "org.darktable.service",
-                     "--object-path", "/darktable", "--method", "org.darktable.service.Remote.Quit")
-    return "asked over D-Bus" + (f" ({out.strip()})" if out.strip() else "")
-
-
-async def _run(*cmd: str) -> str:
-    try:
-        proc = await asyncio.create_subprocess_exec(*cmd, stdout=asyncio.subprocess.PIPE,
-                                                    stderr=asyncio.subprocess.DEVNULL)
-    except FileNotFoundError:
-        return f"{cmd[0]} not found"
-    out, _ = await proc.communicate()
-    return out.decode(errors="replace")
-
-
-def _alive(pid: int) -> bool:
-    try:
-        os.kill(pid, 0)
-        return True
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
 
 
 engine = Engine()

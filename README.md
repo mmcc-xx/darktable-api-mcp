@@ -247,7 +247,7 @@ a server over SSH, with the web app reached through an SSH tunnel
 | `compare_before_after`, `mark_before` | before and after of the edit (both renders, for the AI), shown to the user as a before/after slider in the web app; "before" is the step before the AI's first edit of the photo, or where `mark_before` put it |
 | `propose_alternatives`, `apply_alternative`, `keep_alternative` | labeled alternatives (crops, B&W filters, looks: changes as calls of the editing tools) rendered without touching the edit, shown to the user as a strip in the web app; apply the one picked, or keep it as a duplicate photo with its version name set |
 | `save`, `discard_changes`, `start_over` | write the edit to the library; reopen as saved; delete the edit and apply darktable's defaults again (asks for `confirm`) |
-| `library_status`, `release_library`, `acquire_library`, `takeover_library` | hand the library to darktable's GUI and take it back; `takeover_library` asks a running darktable to quit the normal way (asks for `confirm`, never kills it) |
+| `library_status`, `release_library`, `acquire_library` | hand the library to darktable's GUI and take it back |
 
 Edits stay in memory until `save`. Errors come back as MCP tool errors with
 darktable's message, e.g. `'exposure': 99 is outside -18..18`.
@@ -314,7 +314,6 @@ photos are only read.
 | `IMMICH_API_KEY` | for the Immich tools; else `~/.config/darktable-api-mcp/immich` | an Immich API key (permissions: album.read, album.create, albumAsset.create, albumAsset.delete, asset.read, asset.view, asset.download, asset.upload, asset.update, asset.copy, asset.delete, stack.create, stack.update) |
 | `IMMICH_PANGOLIN` | optional; default `~/.config/darktable-api-mcp/immich-pangolin` | a file of `P_ACCESS_TOKEN_ID=` / `P_ACCESS_TOKEN=` lines: a Pangolin share link's headers, for an Immich behind Pangolin's sign-in |
 | `IMMICH_INBOX`, `DTAPI_IMMICH_DIR` | optional (or `immich.conf` lines); default `Edit in darktable`, `~/Pictures/immich` | the inbox album's name; where Immich originals are downloaded to (a folder per year) |
-| `DTAPI_GUI_BIN` | default: `darktable` next to `DTAPI_BIN` | the only darktable `takeover_library` may quit |
 | `DTAPI_MAX_SESSIONS`, `DTAPI_IDLE_EXIT` | 3, 600 | photos the engine keeps open, and seconds it runs after the last client left; used when this server starts the engine |
 | `DTAPI_DUST_CACHE` | default: `~/.cache/darktable-api-mcp/dust` | `find_dust_spots`' per-roll dust maps |
 | `DTAPI_HUGIN_BIN` | default: `~/.local/hugin/bin`, else the PATH | Hugin's command-line tools, for `make_panorama` |
@@ -375,8 +374,7 @@ darktable quits, or with `acquire_library`.
 
 Tested on macOS 27 (Apple M1) and Linux (Ubuntu 24.04): the engine's test
 suite, headless, and Claude Code sessions with
-the skills. On Linux, `takeover_library` uses darktable's D-Bus `Quit`
-method (untested).
+the skills.
 
 ## License
 
