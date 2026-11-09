@@ -5,11 +5,9 @@ An [MCP](https://modelcontextprotocol.io) server that lets an AI assistant
 library and edit photos. All the work is done by **darktable-api**, darktable's
 own code running as a long-lived headless engine. The engine renders previews,
 applies module settings and writes the history to the library exactly as
-darktable does. darktable's own window (built from the same fork) can serve
-the API as well instead, sharing the photo open in its darkroom live. A few
-tools need darktable's window (switching its darkroom to a photo, a few auto
-buttons such as the tone equalizer's wands); everything else, most color
-pickers included, works headless. No Lua script or XMP editing is involved.
+darktable does. It is headless only: to work in darktable itself, release the
+library and open it in stock darktable (a few auto buttons, such as the tone
+equalizer's wands, have no headless version; most color pickers do). No Lua script or XMP editing is involved.
 
 darktable-api is three repositories: the
 [darktable fork](https://github.com/mmcc-xx/darktable/tree/darktable-api)
@@ -150,14 +148,6 @@ Set it in the shell you run the steps below in:
    (in Claude Code: `/mcp`), and ask e.g. "list my last film roll" or
    "open photo 12 and do a basic edit". The web page follows along live.
 
-7. **Optional: darktable's own window** on the same library, shared live
-   with the browser and the AI:
-
-       ~/src/darktable/build/bin/darktable \
-         --configdir ~/src/darktable-api-mcp/library-copy/config \
-         --cachedir ~/src/darktable-api-mcp/library-copy/cache \
-         --api-socket ~/src/darktable-api-mcp/library-copy/darktable-api.sock
-
 The AI mask and AI denoise tools need darktable's AI models: download them
 in that darktable's preferences (AI tab).
 
@@ -217,7 +207,7 @@ a server over SSH, with the web app reached through an SSH tunnel
 | `photo_sheet`, `tag_photos` | tagging by content: pages of thumbnails with each photo's id, date, camera, place and tags for the AI to look at, then each photo's own tags applied in one call |
 | `set_rating`, `set_color_label` | rate (0–5), reject, color labels, as darktable's lighttable |
 | `open_photo` | open a photo for editing (joins an edit already open in another app, unsaved changes included) |
-| `open_in_darkroom`, `get_collection` | switch darktable's darkroom to a photo (needs darktable's window); the photos darktable's lighttable shows, and the selection |
+| `get_collection` | the photos darktable's lighttable shows, and the selection |
 | `check_sensor_clipping` | real sensor clipping, from the raw file, per color, with each color's headroom (needs the `[dust]` extra) |
 | `solve_exposure`, `solve_highlights` | set exposure so a region (points, boxes, markers) reaches a target Lab L, and the tone mapper's white point (agx, filmic rgb, sigmoid) so no more than a given percent of the render clips, each in one call of a few small readouts and one history step; solve_highlights reports sensor clipping (check_sensor_clipping) instead of changing anything it can't fix |
 | `make_panorama` | stitch photos with Hugin (needs its command-line tools: `DTAPI_HUGIN_BIN` or `~/.local/hugin/bin`): first call returns what would make seams show (lens correction, white balance, per-frame tone mapping ...) and a question; the second, with `fixes`, stitches virtual copies into a 16-bit Deflate TIFF beside the frames, imported, tagged `panorama\|from ...` and grouped |
@@ -251,10 +241,10 @@ a server over SSH, with the web app reached through an SSH tunnel
 | `fix_red_eye` | red eye from points or a marker (an area is searched for red round pupils): `desaturate` (a masked color balance rgb instance, catchlight kept) or `fill` (the local AI model, then a dark pupil and catchlight); `auto` picks; pets' eyeshine needs `fill` |
 | `list_styles`, `create_style`, `apply_style`, `delete_style` | darktable's styles: make one from a photo's edit, apply one to photos (e.g. one B&W look on a set), as the lighttable does |
 | `paste_edit` | one photo's edit, or some of its modules, onto other photos (append or overwrite), as darktable's copy and paste |
-| `list_pickers`, `use_picker` | a module's color pickers and auto buttons (exposure's picker, color calibration's white balance picker, AgX's auto tune levels, tone equalizer's wands, ...), used as clicking them in darktable: on the photo in darktable's darkroom (needs darktable's window); most pickers also headless (`list_pickers` shows which) |
+| `list_pickers`, `use_picker` | a module's color pickers and auto buttons (exposure's picker, color calibration's white balance picker, AgX's auto tune levels, tone equalizer's wands, ...), used as clicking them in darktable (`list_pickers` shows which this engine can run) |
 | `tone_band` | which tone equalizer band a spot is in, from the module's own luminance mask (headless engine) |
 | `render_preview` | darktable's rendering of the current, unsaved edit (image); `uncropped=True` shows the whole photo to choose a crop on; `zoom=1` a region at 100%; `history_step` an earlier step (before/after) |
-| `compare_before_after`, `mark_before` | before and after of the edit (both renders, for the AI), shown to the user as a before/after slider in the web app and, for the photo in darktable's darkroom, a snapshot in darktable's snapshots panel split against the edit (when darktable's window serves the library); "before" is the step before the AI's first edit of the photo, or where `mark_before` put it |
+| `compare_before_after`, `mark_before` | before and after of the edit (both renders, for the AI), shown to the user as a before/after slider in the web app; "before" is the step before the AI's first edit of the photo, or where `mark_before` put it |
 | `propose_alternatives`, `apply_alternative`, `keep_alternative` | labeled alternatives (crops, B&W filters, looks: changes as calls of the editing tools) rendered without touching the edit, shown to the user as a strip in the web app; apply the one picked, or keep it as a duplicate photo with its version name set |
 | `save`, `discard_changes`, `start_over` | write the edit to the library; reopen as saved; delete the edit and apply darktable's defaults again (asks for `confirm`) |
 | `library_status`, `release_library`, `acquire_library`, `takeover_library` | hand the library to darktable's GUI and take it back; `takeover_library` asks a running darktable to quit the normal way (asks for `confirm`, never kills it) |
@@ -379,16 +369,12 @@ web page updates live, and `save` saves the whole edit. The engine keeps up
 to 3 photos open and stops 10 minutes after the last client disconnected,
 unless something is unsaved.
 
-darktable's own window can serve the library as well: started (from the
-same fork) with `--api-socket` pointing at the same socket, it takes over
-from the engine automatically, unsaved edits included, and the photo open in
-its darkroom is shared live: the AI's changes move darktable's sliders, and
-the user's changes in darktable reach the AI. When darktable quits, the
-server goes back to the engine. (`release_library` / `acquire_library` are for
-a darktable started without `--api-socket`.)
+To work in darktable itself, `release_library` (it saves or refuses unsaved
+edits) and open the library in stock darktable; the engine takes it back when
+darktable quits, or with `acquire_library`.
 
 Tested on macOS 27 (Apple M1) and Linux (Ubuntu 24.04): the engine's test
-suite, headless and with darktable's window, and Claude Code sessions with
+suite, headless, and Claude Code sessions with
 the skills. On Linux, `takeover_library` uses darktable's D-Bus `Quit`
 method (untested).
 

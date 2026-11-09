@@ -13,18 +13,14 @@ translation of it into tool calls and checks.
 ## Before you start
 
 1. **Find the photo.** If the user says "this photo" or "the one I have
-   open", call `library_status`; if `darkroom_imgid` (darktable's window)
-   or `web_imgid` (the web app, headless) is set, use
+   open", call `library_status`; if `web_imgid` (the web app) is set, use
    `open_darkroom_photo` and say which photo it took. A number ("photo 36", "id 36") is the library
    id: `open_photo(36)` directly. A file name: search `list_images`
    (`rating="all"`: by default it hides rejected photos) or
    `get_collection` (what darktable's lighttable shows). Ask only if
    these don't settle it.
 2. **Know where you are running.**
-   - *darktable's window serves the library* (the photo is in its darkroom):
-     pickers and auto buttons work (`list_pickers`, `use_picker`). The
-     user sees every change live.
-   - *Headless*: the pickers (exposure, white balance, color
+   - The engine is headless: the pickers (exposure, white balance, color
      calibration, AgX, filmic rgb, levels, color balance rgb, retouch's
      fill color, ...; `list_pickers` shows which); no auto buttons.
      Measure with `measure_photo` and set values with `set_module`.
@@ -58,8 +54,7 @@ Goal: the main subject (face, central object) at a sensible mid brightness.
 Ignore clipped highlights and black shadows at this point; AgX and tone
 equalizer deal with them.
 
-- `use_picker("exposure", "exposure", box=<subject box>)` (window and
-  headless) puts the box at mid gray; then fine-tune by eye.
+- `use_picker("exposure", "exposure", box=<subject box>)` puts the box at mid gray; then fine-tune by eye.
 - Or `measure_photo(boxes=[<subject box>])` and change
   `exposure` in steps (+1 EV ≈ twice as bright in linear light). A typical
   midtone subject lands around Lab L 50–60 in the render; faces a bit
@@ -77,8 +72,8 @@ White balance is done in **color calibration** (`channelmixerrgb`), which
 handles highlights and mixed light better.
 
 - `use_picker("channelmixerrgb", "picker", box=<neutral area>)` on
-  something that should be grey or white (wall, shirt, cloud, paper),
-  in the window or headless; then check with `measure_photo`.
+  something that should be grey or white (wall, shirt, cloud, paper);
+  then check with `measure_photo`.
 - By hand: `measure_photo(boxes=[<neutral area>])`; a neutral area should
   have Lab a and b near 0. Adjust `temperature` (for a temperature-based
   illuminant) in a few hundred K steps and re-measure. Raising
@@ -100,8 +95,7 @@ one; never add AgX on top. Don't use base curve for new edits.
 
 - Start from a preset if AgX is fresh: `list_presets("agx")`, e.g.
   "blender-like|base" (neutral) or "blender-like|punchy".
-- `use_picker("agx", "exposure range/auto tune levels")` (window or
-  headless) sets the white and black relative exposure from the photo
+- `use_picker("agx", "exposure range/auto tune levels")` sets the white and black relative exposure from the photo
   (filmic rgb: `use_picker("filmicrgb", "auto tune levels")`). Or by hand:
   leave `range_white_relative_ev` / `range_black_relative_ev` unless
   highlights clip in the render (raise white) or shadows are crushed
@@ -132,9 +126,7 @@ contrast. Use it for sky vs. foreground, backlit faces, deep shadows.
   (0.3–1 EV), or you get halos.
   `tone_band(point=...)` says which band a spot is in, from the
   module's own mask.
-- The mask must spread over the bands. Window: run the wands,
-  `use_picker("toneequal", "mask exposure compensation")` then
-  `"mask contrast compensation"`. Headless: set `exposure_boost` /
+- The mask must spread over the bands. Set `exposure_boost` /
   `contrast_boost` by hand if most of the photo falls in one band.
 - `blending` (smoothing diameter): higher = softer transitions, fewer
   halos.
@@ -146,8 +138,6 @@ contrast. Use it for sky vs. foreground, backlit faces, deep shadows.
 - `saturation_global` / `chroma_global` for stronger changes; chroma is
   harsher.
 - Presets: "basic colorfulness | natural skin / standard / vibrant colors".
-- Window: set the white fulcrum with `use_picker("colorbalancergb",
-  "white fulcrum")` before using the 4 ways tab.
 - Grading (4 ways: `shadows_*`, `midtones_*`, `highlights_*`, `global_*`
   with _Y luminance, _C chroma, _H hue in degrees): subtle, chroma
   0.02–0.1. Only when the user wants a look.
@@ -262,8 +252,7 @@ alone (see darktable-cleanup).
 ## Finishing
 
 - `save` only when the user is happy, or when they asked for a finished
-  edit. Unsaved edits are visible in the web app and darktable's window
-  but not in exports.
+  edit. Unsaved edits are visible in the web app but not in exports.
 - Summarise the edit in plain words: what you changed and why, with the
   values, so the user can undo any of it. Describe effects from what you
   measured (darker, lighter, from L 59 to 56), and check the words match

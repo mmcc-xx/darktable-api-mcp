@@ -120,8 +120,8 @@ composite instance you can switch off or remove.
 
 - **Outline**: a few pixels beyond the object, feather ~0.01. For an
   irregular object, outline it with `add_ai_mask` on a spare module, then
-  `ai_fill(like_mask_of=that module)` and remove the helper mask. In
-  darktable's window the user can draw the mask themselves on any module
+  `ai_fill(like_mask_of=that module)` and remove the helper mask. The
+  user can draw a mask themselves on any module in the web app
   (e.g. a spare exposure instance): `like_mask_of` it, `like_mask_shapes`
   for some of its shapes. A shape with a small core and a wide feather
   leaves the object partly showing.

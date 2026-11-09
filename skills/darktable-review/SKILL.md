@@ -7,8 +7,7 @@ description: Review a photo and its darktable edit through the darktable-api MCP
 
 A review **changes nothing**. No `set_module`, `enable_module`,
 `apply_preset`, masks, retouch, `save`, or anything else that edits or
-saves. The user may have unsaved work in this photo (in darktable's window
-or the web app); a review must leave it exactly as it was. Only offer to
+saves. The user may have unsaved work in this photo (in the web app); a review must leave it exactly as it was. Only offer to
 apply suggestions afterwards; when asked, follow darktable-edit (and the
 other skills) to do it.
 

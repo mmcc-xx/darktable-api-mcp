@@ -66,16 +66,13 @@ to edit; immich_inbox lists the "Edit in darktable" album; after save, immich_se
 puts the edit back (stacked over an Immich original; a resend trashes only our
 previous upload). Ask which albums (immich_albums) the first time a photo is sent.
 
-The engine is shared with the user's web app and darktable's window:
+The engine is shared with the user's web app:
 open_photo joins an edit already open there (unsaved changes included),
-your changes show up live, and save saves the whole edit. If darktable's
-window serves the library, its darkroom photo (library_status:
-darkroom_imgid; open_darkroom_photo) is usually "this photo"; most pickers
-(use_picker) work only on it. With no darktable window, the web app's photo
+your changes show up live, and save saves the whole edit. The web app's photo
 (library_status: web_imgid, the photo its tabs last opened; open_darkroom_photo
-takes it) usually is: a photo id the user gives wins, and say which photo you
-took ("photo 613, last opened in the web app; 610 also open"). While the library is released to darktable's
-GUI, only library_status, acquire_library and takeover_library work. Tell
+takes it) is usually "this photo": a photo id the user gives wins, and say which photo you
+took ("photo 613, last opened in the web app; 610 also open"). While the library is released (the user opens it in darktable
+itself), only library_status, acquire_library and takeover_library work. Tell
 the user what you are doing. Do what the user asked the way they asked:
 if you think another way is better (another mask, tool, module or order),
 say why and ask before doing it.
@@ -566,27 +563,6 @@ async def get_collection(offset: int = 0, limit: int = 100) -> dict:
     return await _call("collection", offset=offset, limit=limit)
 
 
-@mcp.tool()
-async def open_in_darkroom(image_id: int) -> dict:
-    """Show a photo in darktable's darkroom (darktable's window must be
-    serving the library), as clicking it in the filmstrip, or
-    double-clicking it in the lighttable, does; then make it the current
-    photo here. The darkroom saves the photo it leaves."""
-    await _require("darkroom_open")
-    await _call("darkroom_open", imgid=image_id)
-    try:
-        for _ in range(60):
-            st = await engine.library("library_status")
-            if st.get("darkroom_imgid") == image_id:
-                break
-            await asyncio.sleep(0.5)
-        else:
-            raise ToolError("darktable didn't switch to the photo within 30 s")
-    except EngineError as exc:
-        raise _err(exc)
-    return await open_photo(image_id)
-
-
 async def _web_photos(st: dict) -> dict:
     """The web app's photos, for "this photo" with no darktable window
     serving: web_imgid, the photo the web app last opened (its clients' kind
@@ -610,26 +586,18 @@ async def _web_photos(st: dict) -> dict:
 
 @mcp.tool()
 async def open_darkroom_photo() -> dict:
-    """Open "this photo" and make it the current photo: the photo in
-    darktable's darkroom when darktable's window serves the library (edits
-    then appear in darktable live, and the user's edits there are the same
-    edit); with the headless engine, the photo the web app last opened
-    (library_status web_imgid), the same edit as the web app's. The reply's
-    "taken_from" says which ("darkroom" or "web app"); tell the user the
-    photo id you took, and with "also_open" photos, that you took the one
-    last opened. A photo id the user gives wins: use open_photo."""
+    """Open "this photo" and make it the current photo: the photo the web
+    app last opened (library_status web_imgid), the same edit as the web
+    app's. The reply's "taken_from" says so; tell the user the photo id you
+    took, and with "also_open" photos, that you took the one last opened.
+    A photo id the user gives wins: use open_photo."""
     try:
         st = await engine.library("library_status")
     except EngineError as exc:
         raise _err(exc)
-    if st.get("server") == "gui":
-        if not st.get("darkroom_imgid"):
-            raise ToolError("darktable's darkroom shows no photo right now")
-        return {**await open_photo(st["darkroom_imgid"]), "taken_from": "darkroom"}
     web = await _web_photos(st)
     if not web:
-        raise ToolError("darktable's window isn't serving the library and the web app has no photo open: "
-                        "ask the user which photo")
+        raise ToolError("the web app has no photo open: ask the user which photo")
     r = await open_photo(web["web_imgid"])
     return {**r, "taken_from": "web app", "also_open": web["web_open_imgids"]}
 
@@ -1131,13 +1099,6 @@ async def compare_before_after(before_step: int | None = None, show_user: bool =
                                               "before_label": _step_label(items, step),
                                               "after_label": _step_label(items, end)}):
             shown.append("the web app's photo page (a before/after slider)")
-        try:
-            st = await engine.call("library_status")
-            if st.get("darkroom_imgid") == image_id and await engine.supports("darkroom_snapshot"):
-                await engine.call("darkroom_snapshot", history_end=step)
-                shown.append("darktable's darkroom (a snapshot of the before step, split against the edit)")
-        except EngineError as exc:
-            shown.append(f"not darktable's darkroom: {exc}")
     note = (f"before: {_step_label(items, step)}; after: {_step_label(items, end)} (the current edit). "
             + (f"Shown to the user in {' and '.join(shown)}." if shown else "Not shown to the user."))
     return [f"BEFORE ({_step_label(items, step)}):", Image(data=before[0], format="jpeg"),
@@ -4308,15 +4269,14 @@ async def ai_denoise(image_id: int | None = None, strength: float | None = None,
     return await _run_job(lambda: _call("ai_denoise", **params), wait, timeout_s)
 
 
-# ── pickers and auto buttons (darktable's window) ────────────────────────────
+# ── pickers and auto buttons ─────────────────────────────────────────────────
 
 @mcp.tool()
 async def list_pickers(operation: str, instance: int = 0) -> dict:
     """A module's color pickers and auto buttons (name, kind) for
     use_picker, e.g. exposure "exposure", channelmixerrgb "picker", agx
     "exposure range/auto tune levels", toneequal "mask exposure
-    compensation". Pickers work on any photo, auto buttons only on the
-    photo in darktable's darkroom."""
+    compensation". list_pickers shows which this engine can run."""
     await _require("picker_list")
     return await _edit(None, "picker_list", operation=operation, instance=instance)
 
@@ -4349,7 +4309,7 @@ async def use_picker(operation: str, control: str, box: dict | None = None, poin
     """Use a module's picker or auto button (names from list_pickers) as
     clicking it in the darkroom: darktable samples the area and sets the
     module (switched on, one history step). Pickers work on any photo;
-    auto buttons only on the photo in darktable's darkroom. Common:
+    auto buttons only where list_pickers lists them. Common:
     exposure "exposure" (the area to mid gray), channelmixerrgb "picker"
     (white balance making the area neutral; prefer it to temperature's
     "settings/from image area"), agx "exposure range/auto tune levels",
@@ -4391,8 +4351,7 @@ async def list_jobs() -> dict:
 @mcp.tool()
 async def cancel_job(job: int) -> dict:
     """Cancel a running background job; it ends "cancelled" and leaves no
-    file. (In darktable's window the computation stops; headless it runs to
-    its end and the result is discarded.)"""
+    file. (The computation runs to its end and the result is discarded.)"""
     await _require("job_cancel")
     return await _call("job_cancel", job=job)
 
@@ -4401,11 +4360,9 @@ async def cancel_job(job: int) -> dict:
 
 @mcp.tool()
 async def library_status() -> dict:
-    """Who serves the library ("server": "gui" or "engine"), whether it is
-    released to darktable's GUI, darkroom_imgid (the photo in darktable's
-    darkroom, 0 if none), the current photo and whether it has unsaved
-    changes. With the web app connected: web_imgid (the photo its tabs last
-    opened, "this photo" when no darktable window serves) and
+    """Whether the library is released to darktable itself, the current
+    photo and whether it has unsaved changes. With the web app connected:
+    web_imgid (the photo its tabs last opened, "this photo") and
     web_open_imgids (other photos open in an edit session)."""
     try:
         st = await engine.library("library_status")
@@ -4415,20 +4372,19 @@ async def library_status() -> dict:
 
 
 @mcp.tool()
-async def release_library(auto_acquire: bool = True) -> dict:
-    """Close the library so darktable's GUI can open it. Unsaved changes of
-    the open photo are kept and restored on taking it back if the photo
-    wasn't changed in the GUI meanwhile.
+async def release_library(save: bool = False, auto_acquire: bool = True) -> dict:
+    """Close the library so darktable itself can open it. Refused while any
+    open photo has unsaved changes (the error names them). save=True saves
+    them all first: ask the user before passing it, as the edits become the
+    photos' saved edits.
 
     auto_acquire (default True): once darktable's GUI has opened the library
     and quit, the engine takes it back by itself within a few seconds; until
     the GUI opens it, it stays released. False: it stays released until
     acquire_library."""
-    if not auto_acquire:
-        await _require("library_release.auto_acquire")
+    await _require("library_release.save")
     try:
-        return await (engine.library("library_release") if auto_acquire
-                      else engine.library("library_release", auto_acquire=False))
+        return await engine.library("library_release", save=save, auto_acquire=auto_acquire)
     except EngineError as exc:
         raise _err(exc)
 

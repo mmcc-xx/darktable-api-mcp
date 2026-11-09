@@ -112,7 +112,6 @@ class Engine:
         self._render_seqs: dict[str, int] = {}
         self._edits_waiting = 0
         self._listeners: list[Callable[[dict], None]] = []
-        self._handover_until = 0.0     # darktable's window is taking over: don't start an engine
         self.image_id: int | None = None      # the image this client last opened
 
     def available(self) -> tuple[bool, str]:
@@ -145,7 +144,6 @@ class Engine:
             while True:
                 try:
                     await self._open()
-                    self._handover_until = 0.0
                     # not awaited: hello needs ping and a call, which take the locks
                     self._hello_task = asyncio.create_task(self._hello())
                     return
@@ -153,7 +151,7 @@ class Engine:
                     pass
                 if time.time() - t > START_TIMEOUT_S:
                     raise EngineError(f"nobody serves the library and the engine didn't start (see {LOG})")
-                if time.time() >= self._handover_until and (proc is None or proc.poll() is not None):
+                if proc is None or proc.poll() is not None:
                     ok, why = self.available()
                     if not ok:
                         raise EngineError(why)
@@ -199,8 +197,6 @@ class Engine:
                     break
                 msg = json.loads(line)
                 if msg.get("method") == "event":
-                    if (msg.get("params") or {}).get("type") == "handover":
-                        self._handover_until = time.time() + START_TIMEOUT_S
                     for fn in list(self._listeners):
                         try:
                             fn(msg.get("params") or {})
